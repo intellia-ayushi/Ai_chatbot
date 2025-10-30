@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat (Supabase)</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <style>
+        .message{max-width:80%;margin:10px;padding:12px 14px;border-radius:14px}
+        .user{margin-left:auto;background:#e3f2fd;border-bottom-right-radius:6px}
+        .bot{margin-right:auto;background:#f5f5f5;border-bottom-left-radius:6px}
+    </style>
+    <script>
+        window.__SUPABASE_URL__ = "{{ supabase_url or '' }}";
+        window.__SUPABASE_ANON__ = "{{ supabase_anon or '' }}";
+    </script>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const supabaseUrl = window.__SUPABASE_URL__;
+        const supabaseAnon = window.__SUPABASE_ANON__;
+        const supa = (supabaseUrl && supabaseAnon) ? window.supabase.createClient(supabaseUrl, supabaseAnon) : null;
+
+        const chatEl = document.getElementById('chat');
+        const inputEl = document.getElementById('q');
+        const sendBtn = document.getElementById('send');
+        const uploadEl = document.getElementById('file');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const statusEl = document.getElementById('authStatus');
+        const emailEl = document.getElementById('email');
+        const passEl = document.getElementById('pass');
+        const loginBtn = document.getElementById('login');
+        const signupBtn = document.getElementById('signup');
+        const logoutBtn = document.getElementById('logout');
+
+        const ACCESS_TOKEN_KEY = 'sb_access_token';
+        const CHAT_READY_KEY = 'chat_ready';
+        const CLIENT_ID_KEY = 'client_id';
+        let token = localStorage.getItem(ACCESS_TOKEN_KEY) || '';
+        let clientId = localStorage.getItem(CLIENT_ID_KEY);
+        if (!clientId) { clientId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)); localStorage.setItem(CLIENT_ID_KEY, clientId); }
+
+        function addMsg(text, who){
+            const d=document.createElement('div');
+            d.className='message ' + (who==='user'?'user':'bot');
+            d.textContent=text;
+            chatEl.appendChild(d);
+            chatEl.scrollTop=chatEl.scrollHeight;
+        }
+
+        async function refreshAuth(){
+            if (!supa){ statusEl.textContent='Supabase not configured'; return; }
+            const { data: { session } } = await supa.auth.getSession();
+            if (session){
+                token = session.access_token;
+                localStorage.setItem(ACCESS_TOKEN_KEY, token);
+                statusEl.textContent = 'Signed in';
+                logoutBtn.classList.remove('hidden');
+            } else {
+                statusEl.textContent = 'Signed out';
+                logoutBtn.classList.add('hidden');
+            }
+        }
+
+        async function doLogin(){
+            if (!supa) return alert('Supabase not configured');
+            const { error } = await supa.auth.signInWithPassword({ email: emailEl.value.trim(), password: passEl.value.trim() });
+            if (error) return alert(error.message);
+            refreshAuth();
+        }
+        async function doSignup(){
+            if (!supa) return alert('Supabase not configured');
+            const { error } = await supa.auth.signUp({ email: emailEl.value.trim(), password: passEl.value.trim() });
+            if (error) return alert(error.message);
+            alert('Check your email to confirm, then log in.');
+        }
+        async function doLogout(){ if (supa){ await supa.auth.signOut(); localStorage.removeItem(ACCESS_TOKEN_KEY); token=''; refreshAuth(); } }
+
+        loginBtn.onclick = doLogin;
+        signupBtn.onclick = doSignup;
+        logoutBtn.onclick = doLogout;
+        refreshAuth();
+
+        uploadBtn.onclick = async () => {
+            const files = uploadEl.files;
+            if (!files || files.length === 0) return alert('Choose a file');
+            const form = new FormData();
+            for (let i=0;i<files.length;i++){ form.append('file', files[i]); }
+            const res = await fetch('/upload?client_id=' + encodeURIComponent(clientId), {
+                method: 'POST',
+                headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+                body: form
+            });
+            const data = await res.json();
+            if (data.success){
+                addMsg(data.message, 'bot');
+                localStorage.setItem(CHAT_READY_KEY, '1');
+            }else{
+                addMsg(data.error || 'Upload failed', 'bot');
+            }
+        };
+
+        async function ask(){
+            const q = inputEl.value.trim();
+            if (!q) return;
+            addMsg(q, 'user');
+            inputEl.value='';
+            const res = await fetch('/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': 'Bearer ' + token } : {})
+                },
+                body: JSON.stringify({ question: q, mute: false, client_id: clientId })
+            });
+            const data = await res.json();
+            if (data.error){ addMsg(data.error, 'bot'); }
+            else { addMsg(data.response, 'bot'); }
+        }
+        sendBtn.onclick = ask;
+        inputEl.addEventListener('keypress', (e)=>{ if (e.key==='Enter') ask(); });
+    });
+    </script>
+</head>
+<body class="bg-gray-50">
+    <div class="w-full p-3 bg-white border-b flex justify-between items-center">
+        <div class="text-sm text-gray-600">Auth: <span id="authStatus">Checking...</span></div>
+        <div class="flex gap-2 items-center">
+            <input id="email" type="email" placeholder="email" class="border rounded px-2 py-1 text-sm" />
+            <input id="pass" type="password" placeholder="password" class="border rounded px-2 py-1 text-sm" />
+            <button id="login" class="bg-blue-600 text-white px-3 py-1 rounded text-sm">Login</button>
+            <button id="signup" class="bg-green-600 text-white px-3 py-1 rounded text-sm">Signup</button>
+            <button id="logout" class="bg-gray-300 px-3 py-1 rounded text-sm hidden">Logout</button>
+        </div>
+    </div>
+
+    <div class="max-w-5xl mx-auto p-4 grid grid-cols-12 gap-4">
+        <div class="col-span-4 space-y-3">
+            <div class="p-4 bg-white rounded shadow">
+                <h2 class="font-semibold mb-2">Upload Documents</h2>
+                <input id="file" type="file" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.webp" multiple class="block w-full text-sm border rounded p-2" />
+                <button id="uploadBtn" class="mt-2 w-full bg-indigo-600 text-white py-2 rounded">Upload</button>
+                <p class="text-xs text-gray-500 mt-2">PDF, DOC/DOCX, Images supported (as configured on backend)</p>
+            </div>
+        </div>
+        <div class="col-span-8 flex flex-col h-[80vh] bg-white rounded shadow">
+            <div id="chat" class="flex-1 overflow-y-auto p-4"></div>
+            <div class="p-3 border-t flex gap-2">
+                <input id="q" type="text" placeholder="Ask about your documents..." class="flex-1 border rounded px-3 py-2" />
+                <button id="send" class="bg-blue-600 text-white px-5 rounded">Send</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+

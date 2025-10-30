@@ -1,0 +1,11 @@
+first download ollama on your syastem 
+download link-      https://ollama.com/download
+
+after that install these models-
+
+ollama run phi3
+ollama run gemma:2b
+ollama run llama2
+ollama run llama3.2
+ollama run llama3
+

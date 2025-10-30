@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Speaking Avatar</title>  
+  <style>
+    body { margin: 0; background: #ffffff; }
+    #avatar-container {
+      position: fixed;
+      bottom: 80px;
+      right: 30px;
+      width: 300px;
+      height: 300px;
+      z-index: 999;
+    }
+    #speakBtn {
+      position: fixed;
+      bottom: 330px;
+      right: 20px;
+      z-index: 1000;
+      padding: 10px 16px;
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    </style>
+</head>
+<body>
+    <div style="position: relative;">
+      <canvas id="avatar-canvas"></canvas>
+      <img src="/static/Logo-Black-TM.png" alt="overlay" style="position: absolute; bottom: -475px; right: 80px; width: 175px; 
+        z-index: 1000;" />
+    </div>
+    <img id="muteIcon" src="{{ url_for('static', filename='mute.png') }}" alt="Muted"
+     style="position: fixed; bottom: 350; right: 80px; width: 40px; z-index: 2000; display: none;" />
+
+    <div id="avatar-container"></div>
+
+    <script type="module">
+
+        console.log("✅ Avatar module script running");
+        
+        let availableVoices = [];
+        let voicesReady = false;
+        window.speechSynthesis.onvoiceschanged = () => {
+          availableVoices = speechSynthesis.getVoices();
+          voicesReady = Array.isArray(availableVoices) && availableVoices.length > 0;
+          console.log("🔊 Voices loaded:", availableVoices.map(v => v.name));
+          try { if (typeof window.__voicesCallback === 'function') { const cb = window.__voicesCallback; window.__voicesCallback = null; cb(); } } catch(e) {}
+        };
+        window.voicesReady = () => voicesReady;
+        
+        import * as THREE from 'https://esm.run/three@0.158.0';
+        import { GLTFLoader } from 'https://esm.run/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+
+        let selectedAvatar = null;
+
+        console.log("🧠 Initial selectedAvatar from localStorage:", selectedAvatar);
+
+        let avatar, jawBone;
+        let handBones = [];
+        
+        let morphMesh = null;
+        let morphDict = null;
+        let morphInfluences = null;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+
+        renderer.setSize(300, 300);
+        renderer.setClearColor(0x000000, 0);
+        document.getElementById("avatar-container").appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+        const light = new THREE.DirectionalLight(0xffffff, 2);
+        light.position.set(0, 1, 1).normalize();
+        scene.add(light);
+
+        camera.position.z = 1.5;
+
+        // 07/07/2025 : male + female avatar
+        let maleAvatar=null, femaleAvatar=null;
+
+        if (selectedAvatar === "male" || selectedAvatar === "female"){
+          loadAvatar(selectedAvatar);
+        }
+
+
+        function loadAvatar(gender){
+          console.log("📦 loadAvatar() triggered for:", gender);
+          const loader = new GLTFLoader();
+          const path = gender === "male" ? "/static/684ff6e2227a9a0422181bcc.glb" : "/static/686b8e703856a81c484ed51e.glb";
+          loader.load(path, (gltf)=>{
+            const avatar = gltf.scene;
+            console.log("🎉 Avatar loaded:", gender);
+            if (gender ==="female"){
+              avatar.position.y = -2.32;     // Slightly higher/lower if needed
+              avatar.position.x = 0;        // Center or offset if required
+              avatar.rotation.y = 0.1;
+            }else{
+              avatar.position.y = -2.45;
+              avatar.rotation.y = 0;
+              avatar.position.x = 0;
+            }
+
+            avatar.scale.set(1.5, 1.5, 1.5);
+
+            scene.add(avatar);
+            console.log("🧱 Avatar added to scene");
+
+            if(gender==="male"){
+              maleAvatar=avatar;
+              console.log("📍 Stored as maleAvatar");
+            } else{
+              femaleAvatar=avatar;
+              console.log("📍 Stored as femaleAvatar");
+            }
+
+            initLipSync(avatar);
+            animate();
+          }, undefined,(error)=>{
+            console.error("❌ Failed to load avatar:", error);
+          });
+        }
+        // const loader = new GLTFLoader();
+        // loader.load('/static/684ff6e2227a9a0422181bcc.glb', function (gltf) {
+        //     console.log("✅ Male Avatar loaded");
+        //     maleAvatar = gltf.scene;
+        //     maleAvatar.scale.set(1.5,1.5,1.5);
+        //     maleAvatar.position.y = -2.45;
+        //     maleAvatar.rotation.y = 0;
+        //     scene.add( maleAvatar);
+
+        //     if (selectedAvatar !== "male") maleAvatar.visible = false;
+        //     initLipSync(maleAvatar);
+        //     animate();
+        //     }, undefined, function (error) {
+        //     console.error("❌ Error loading male avatar:", error);
+        // });
+        
+        // loader.load('/static/686b8e703856a81c484ed51e.glb', function(gltf){
+        //   console.log("✅ Female avatar loaded");
+        //   femaleAvatar = gltf.scene;
+        //   femaleAvatar.scale.set(1.5, 1.5, 1.5);
+        //   femaleAvatar.position.y = -2.45;
+        //   femaleAvatar.rotation.y = 0;
+        //   scene.add(femaleAvatar);
+
+        //   if (selectedAvatar !== "female") femaleAvatar.visible = false;
+        //   initLipSync(femaleAvatar); 
+        // }, undefined, function(error){
+        //   console.error("❌ Error loading female avatar : ", error);
+        // });
+
+        function initLipSync(avatarScene){
+          console.log("🔊 initLipSync called");
+          avatarScene.traverse((node) =>{
+            if (node.isMesh && node.name === "Wolf3D_Head" && node.morphTargetDictionary){
+              morphMesh = node;
+              morphDict = node.morphTargetDictionary;
+              morphInfluences = node.morphTargetInfluences;
+              const smileIndex = morphDict["mouthSmile"];
+              if (smileIndex !== undefined){
+                morphInfluences[smileIndex] = 0.5;
+              }
+              console.log("🎤 Lip sync targets ready");
+            }
+          });
+        }
+
+        function animate() {
+          requestAnimationFrame(animate);
+          renderer.render(scene, camera);
+        }
+
+        // ✅ Lip sync with Web Speech API
+        const synth = window.speechSynthesis;
+        let jawAnim;
+        let currentUtterance = null;
+        let pendingText = null;
+
+        function ensureVoices(callback){
+          try { availableVoices = speechSynthesis.getVoices() || availableVoices; } catch(e) {}
+          if (voicesReady || (availableVoices && availableVoices.length > 0)){
+            voicesReady = true;
+            callback();
+            return;
+          }
+          // wait for voices to become ready
+          window.__voicesCallback = callback;
+          // poke getVoices to trigger onvoiceschanged
+          try { speechSynthesis.getVoices(); } catch(e) {}
+          // fallback timeout
+          setTimeout(() => {
+            if (!voicesReady) {
+              callback();
+            }
+          }, 800);
+        }
+
+        function speak(text) {
+          if (!text) return;
+          pendingText = text;
+          try { synth.cancel(); } catch(e) {}
+          try { synth.resume(); } catch(e) {}
+          ensureVoices(() => {
+            const toSpeak = pendingText; // snapshot
+            pendingText = null;
+            const utter = new SpeechSynthesisUtterance(toSpeak);
+            currentUtterance = utter;
+            utter.lang = 'en-US';
+            const voice = getSelectedVoice();
+            if (voice) utter.voice = voice;
+            utter.onstart = () => startLipSyncWithUtterance(utter);
+            utter.onend = () => { stopLipSync(); currentUtterance = null; };
+            // schedule after cancel to avoid ignored speak in some browsers
+            setTimeout(() => {
+              try { synth.speak(utter); } catch(e) { console.warn('speak failed', e); }
+            }, 30);
+          });
+        }
+
+        function stopSpeaking(){
+          pendingText = null;
+          try { synth.cancel(); } catch(e) {}
+          stopLipSync();
+          currentUtterance = null;
+        }
+        window.stopSpeaking = stopSpeaking;
+        window.isSpeaking = () => synth.speaking;
+
+        function getSelectedVoice(){
+          
+          if (!availableVoices || availableVoices.length === 0){
+            console.warn("⚠️ Voices not ready, using fallback.");
+            return null;
+          }
+          const preferredVoice = availableVoices.find(v =>
+            selectedAvatar === "male"
+            ? v.name.includes("David") || v.name.includes("Mark") || v.name.includes("Male")
+            : v.name.includes("Zira") || v.name.includes("Female")
+          );
+          if(!preferredVoice){
+            console.warn("⚠️ Preferred voice not found. Using default: ",availableVoices[0]?.name)
+          }
+          console.log("🎤 Using voice:", preferredVoice?.name);
+          return preferredVoice || availableVoices[0];
+        }
+
+        let lipSyncInterval;
+
+        function startLipSyncWithUtterance(utter, text){
+          if (!morphMesh || !morphDict) return;
+          const mouthOpenIndex = morphDict["mouthOpen"];
+          if (mouthOpenIndex === undefined) return;
+
+          utter.onboundary = (event) =>{
+            if(event.name == "word"){
+              morphInfluences[mouthOpenIndex] = 1.0;
+              setTimeout(() => {
+                morphInfluences[mouthOpenIndex] = 0.0;
+              }, 150);
+            }
+          };
+        }
+
+        function stopLipSync() {
+          if (!morphMesh || !morphDict) return;
+
+          const mouthOpenIndex = morphDict["mouthOpen"];
+          if (mouthOpenIndex !== undefined) {
+            morphInfluences[mouthOpenIndex] = 0.0;
+          }
+
+          clearInterval(lipSyncInterval);
+        }
+        window.avatarReady = true;
+        window.speak = speak;
+
+        window.setAvatarGender = function(gender){
+          console.log("📥 setAvatarGender() called with:", gender);
+          selectedAvatar = gender;
+          localStorage.setItem("selectedAvatar", gender);
+
+          if ((gender === "male" && !maleAvatar) || (gender === "female" && !femaleAvatar)){
+            console.log("📦 Avatar not loaded yet — calling loadAvatar()");
+            loadAvatar(gender);
+          }
+
+          if (maleAvatar) {
+            maleAvatar.visible = (gender === "male");
+            console.log("👔 maleAvatar.visible =", maleAvatar.visible);
+          }
+          if (femaleAvatar){
+            femaleAvatar.visible = (gender === "female");
+            console.log("👗 femaleAvatar.visible =", femaleAvatar.visible);
+          }
+          console.log("👤 Avatar switched to: ",gender);
+        };
+
+    </script>
+</body>
+</html>

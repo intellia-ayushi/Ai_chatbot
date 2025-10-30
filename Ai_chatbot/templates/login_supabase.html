@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in | HR Assistant</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script>
+    window.__SUPABASE_URL__ = "{{ supabase_url or '' }}";
+    window.__SUPABASE_ANON__ = "{{ supabase_anon or '' }}";
+  </script>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const url = window.__SUPABASE_URL__;
+      const key = window.__SUPABASE_ANON__;
+      if (!url || !key) {
+        document.getElementById('status').textContent = 'Missing Supabase configuration';
+        return;
+      }
+      const supa = window.supabase.createClient(url, key);
+      const statusEl = document.getElementById('status');
+      const emailEl = document.getElementById('email');
+      const passEl = document.getElementById('pass');
+      const loginBtn = document.getElementById('loginBtn');
+      const signupBtn = document.getElementById('signupBtn');
+
+      async function checkSession(){
+        const { data: { session } } = await supa.auth.getSession();
+        if (session) {
+          window.location.href = '/chat';
+        }
+      }
+
+      loginBtn.onclick = async () => {
+        const email = emailEl.value.trim();
+        const password = passEl.value.trim();
+        if (!email || !password) { statusEl.textContent = 'Enter email and password'; return; }
+        statusEl.textContent = 'Signing in...';
+        const { error } = await supa.auth.signInWithPassword({ email, password });
+        if (error) { statusEl.textContent = error.message; return; }
+        window.location.href = '/chat';
+      };
+
+      signupBtn.onclick = async () => {
+        const email = emailEl.value.trim();
+        const password = passEl.value.trim();
+        if (!email || !password) { statusEl.textContent = 'Enter email and password'; return; }
+        statusEl.textContent = 'Signing up...';
+        try {
+          const { data, error } = await supa.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: window.location.origin + '/chat' }
+          });
+          if (error) {
+            // Common case when Email provider is disabled in Supabase
+            const msg = (error && error.message || '').toLowerCase();
+            if (msg.includes('email provider is disabled') || msg.includes('identity provider is disabled')) {
+              statusEl.textContent = 'Enable Email provider in Supabase → Authentication → Providers → Email.';
+              return;
+            }
+            statusEl.textContent = error.message;
+            return;
+          }
+          // If confirmations are disabled, session may be created immediately; otherwise try sign-in
+          const hasSession = !!(data && data.session);
+          if (hasSession) { window.location.href = '/chat'; return; }
+          const si = await supa.auth.signInWithPassword({ email, password });
+          if (si.error) {
+            statusEl.textContent = 'Account created. Now sign in with your password.';
+            return;
+          }
+          window.location.href = '/chat';
+        } catch (e) {
+          statusEl.textContent = String(e);
+        }
+      };
+
+      // If already logged in, go to chat
+      checkSession();
+    });
+  </script>
+</head>
+<body class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+  <div class="w-full max-w-md bg-white rounded-xl shadow p-6">
+    <h1 class="text-2xl font-semibold mb-1 text-center">Welcome</h1>
+    <p class="text-sm text-gray-500 mb-6 text-center">Sign up or sign in to continue to chat</p>
+
+    <label class="block text-sm mb-1">Email</label>
+    <input id="email" type="email" class="w-full border rounded px-3 py-2 mb-3" placeholder="you@example.com" />
+
+    <label class="block text-sm mb-1">Password</label>
+    <input id="pass" type="password" class="w-full border rounded px-3 py-2 mb-4" placeholder="••••••••" />
+
+    <div class="flex gap-2">
+      <button id="loginBtn" class="flex-1 bg-blue-600 text-white py-2 rounded">Sign in</button>
+      <button id="signupBtn" class="flex-1 bg-green-600 text-white py-2 rounded">Sign up</button>
+    </div>
+
+    <div id="status" class="text-sm text-gray-600 mt-4 text-center"></div>
+  </div>
+</body>
+</html>
+

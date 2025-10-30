@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HR Document Assistant</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .chat-container {
+            height: calc(100vh - 200px);
+        }
+
+        .message {
+            max-width: 80%;
+            margin: 10px;
+            padding: 15px;
+            border-radius: 15px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: auto;
+            border-bottom-right-radius: 5px;
+        }
+
+        .bot-message {
+            background-color: #f5f5f5;
+            margin-right: auto;
+            border-bottom-left-radius: 5px;
+        }
+
+        .custom-file-upload {
+            border: 2px dashed #4a5568;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .custom-file-upload:hover {
+            border-color: #2d3748;
+            background-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .sidebar {
+            background: linear-gradient(135deg, #1a365d 0%, #2c5282 100%);
+        }
+
+        .header-text {
+            background: linear-gradient(to right, #ffffff, #e2e8f0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .upload-icon {
+            transition: transform 0.3s ease;
+        }
+
+        .custom-file-upload:hover .upload-icon {
+            transform: scale(1.1);
+        }
+
+        .send-button {
+            transition: all 0.3s ease;
+        }
+
+        .send-button:hover {
+            transform: translateX(2px);
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .loader {
+            border: 6px solid #f3f3f3;
+            border-top: 6px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+
+        .talking {
+            animation: talk 0.3s infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        #mute-icon {
+            filter: none;
+        }
+
+        /* voice wave while speech input */
+        #voice-waveform {
+            position: absolute;
+            bottom: 100px;
+            left: 55%;
+            transform: translateX(-50%);
+
+            width: 150px;
+            max-width: 600px;
+            text-align: center;
+            padding: 4px 0;
+            background: #2b2b2b;
+            border-radius: 10px;
+            box-shadow: 0 0 12px rgba(0, 123, 255, 0.3);
+            transition: opacity 0.3s ease;
+            opacity: 0;
+            visibility: hidden;
+            z-index: 100;
+        }
+
+        #waveform-canvas {
+            width: 100%;
+            height: 100%;
+            background-color: transparent;
+            display: block;
+        }
+
+        #voice-waveform.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* voice wave while speech input end */
+
+        /* avatar thinking start */
+        .typing-bubble {
+            position: absolute;
+            bottom: 250px;
+            right: 230px;
+            background: #ffffff;
+            padding: 10px 12px;
+            border-radius: 16px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            display: none;
+            flex-direction: row;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .typing-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            right: 8px;
+            width: 10;
+            height: 0;
+            border-top: 10px solid #ffffff;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+        }
+
+        .typing-bubble span {
+            width: 6px;
+            height: 6px;
+            background-color: #007bff;
+            border-radius: 50%;
+            display: inline-block;
+            animation: blink 1.4s infinite both;
+        }
+
+        .typing-bubble span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-bubble span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes blink {
+            0% {
+                opacity: 0.2;
+                transform: scale(1);
+            }
+
+            20% {
+                opacity: 1;
+                transform: scale(1.2);
+            }
+
+            100% {
+                opacity: 0.2;
+                transform: scale(1);
+            }
+        }
+
+        /* avatar thinking end */
+
+        /* light and dark mode starts here */
+        .theme-toggle {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            z-index: 0;
+            background: #f0f0f0;
+            border: none;
+            font-size: 20px;
+            padding: 8px 12px;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 6px rgba(0, 0, 0, 0.2);
+        }
+
+        body {
+            background-color: #ffffff;
+            color: #222;
+        }
+
+        .chatbox,
+        .input-area,
+        #voice-waveform {
+            background: #f9f9f9;
+            color: #111;
+        }
+
+        body.dark-mode {
+            background-color: #1e1e1e;
+            color: #f0f0f0;
+        }
+
+        body.dark-mode .chatbox,
+        body.dark-mode .input-area,
+        body.dark-mode #voice-waveform {
+            background: #2b2b2b;
+            color: #eee;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+        }
+
+        body.dark-mode .theme-toggle {
+            background: #333;
+            color: #fff;
+        }
+
+        body.dark-mode .bot-message {
+            background-color: #333333;
+            color: #f0f0f0;
+        }
+
+        body.dark-mode .user-message {
+            background-color: #3b3b3b;
+            color: #f0f0f0;
+        }
+
+        body.dark-mode .sidebar {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        }
+
+        body.dark-mode .input-area {
+            background-color: #2b2b2b;
+            color: #f0f0f0;
+            border-top: 1px solid #444;
+        }
+
+        body.dark-mode input[type="text"] {
+            background-color: #3a3a3a;
+            color: #f0f0f0;
+            border-color: #555;
+        }
+
+        body.dark-mode input[type="text"]::placeholder {
+            color: #bbb;
+        }
+
+        body.dark-mode #sendButton {
+            background-color: #1e90ff;
+            color: #fff;
+        }
+
+        body.dark-mode #sendButton:hover {
+            background-color: #1c7ed6;
+        }
+
+        body.dark-mode #voiceInputBtn {
+            background-color: #2ecc71;
+            color: #fff;
+        }
+
+        body.dark-mode #voiceInputBtn:hover {
+            background-color: #27ae60;
+        }
+
+        body.dark-mode #muteToggleBtn {
+            background-color: #888;
+            color: #fff;
+        }
+
+        body.dark-mode #muteToggleBtn:hover {
+            background-color: #666;
+        }
+
+        body.dark-mode .bg-white {
+            background-color: #1e1e1e !important;
+            border-top: 1px solid #333 !important;
+            box-shadow: none !important;
+        }
+
+        body.dark-mode #mute-icon {
+            filter: brightness(100);
+        }
+
+        body.dark-mode .mute-icon path {
+            fill: white;
+        }
+
+        /* light and dark mode ends here */
+
+        /* transition for everything : */
+        body,
+        .message,
+        .input-area,
+        .chatbox,
+        .sidebar,
+        input,
+        button,
+        #voice-waveform {
+            transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        /* transition for everything ends */
+
+        /* 2 avatars CSS */
+        .avatar-option {
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .avatar-option:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 12px rgba(0, 123, 255, 0.4);
+        }
+
+        /* 2 avatars CSS end */
+
+        /* change assistant button */
+        .change-avatar-btn {
+            padding: 10px 16px;
+            font-size: 14px;
+            background-color: #e2e8f0;
+            color: #1e293b;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            font-weight: 500;
+        }
+
+        .change-avatar-btn:hover {
+            background-color: #cbd5e1;
+            transform: scale(1.05);
+        }
+
+        .change-avatar-btn:active {
+            transform: scale(0.98);
+            background-color: #94a3b8;
+        }
+
+        #changeAvatarBtn {
+            position: absolute;
+            top: 528px;
+            right: 1328px;
+            z-index: 0;
+        }
+
+        /* Logout just below Change Assistant */
+        #logoutBtnSide {
+            position: absolute;
+            top: 568px;
+            /* 40px below changeAvatarBtn */
+            right: 1328px;
+            z-index: 0;
+            padding: 10px 16px;
+            font-size: 14px;
+            background-color: #513737;
+            /* gray-700 */
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            font-weight: 500;
+        }
+
+        #logoutBtnSide:hover {
+            background-color: #4b5563;
+        }
+
+        #logoutBtnSide:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100">
+
+    <button id="theme-toggle" class="theme-toggle">🌙</button>
+
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <div class="sidebar w-64 p-6 text-white">
+            <div class="flex items-center mb-8">
+                <img src="/static/chatbot-logo.jpg" alt="HR Assistant Logo"
+                    class="w-12 h-12 rounded-full mr-3 shadow-lg">
+                <h1 class="text-xl font-bold header-text">HR Document Assistant</h1>
+            </div>
+
+            <div class="mb-8">
+                <div class="custom-file-upload" id="dropZone">
+                    <img src="/static/pdf-upload-logo.png" alt="Upload" class="w-16 h-16 mx-auto mb-4 upload-icon">
+                    <p class="text-sm font-medium">Drag & Drop Document</p>
+                    <p class="text-xs mt-2 text-gray-300">or</p>
+                    <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.webp"
+                        multiple>
+                    <button type="button"
+                        class="mt-2 bg-white text-blue-800 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-100 transition-colors">
+                        Browse Files
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-auto text-sm text-gray-300">
+                <p class="mb-2">Supported formats (multiple files allowed):</p>
+                <ul class="list-disc list-inside">
+                    <li>PDF Documents (.pdf)</li>
+                    <li>DOC/DOCX Documents (.doc, .docx)</li>
+                    <li>Images (JPG, JPEG, PNG, BMP, TIFF, WEBP)</li>
+                </ul>
+            </div>
+
+            <!-- Buttons Section -->
+            <div>
+                <div style="text-align: left;">
+                    <button id="changeAvatarBtn"
+                        class="bg-white text-black hover:text-gray-700 border border-gray-400 hover:border-gray-600 px-7 py-2 rounded text-sm font-semibold shadow transition duration-200"
+                        style="font-weight: 600;">
+                        🔄 Change Assistant
+                    </button>
+                </div>
+
+
+                <div style="margin-top: 80px;">
+                    <button id="logoutBtnSide+"
+                        class="w-full bg-red-600 hover:bg-red-600 text-white px-4 py-2 rounded text-sm shadow">
+                        Logout
+                    </button>
+                </div>
+
+            </div>
+        </div>
+
+
+        <!-- Main Chat Area -->
+        <div class="flex-1 flex flex-col h-screen">
+            <!-- Chat Messages -->
+            <div class="flex-1 p-6 overflow-y-auto chat-container" id="chatContainer">
+                <div class="bot-message message">
+                    👋 Welcome to HR Document Assistant! Upload any document, and I'll help you understand its contents.
+                    I can answer questions about policies, procedures, and any information contained in your documents.
+                </div>
+            </div>
+            <div style="position: relative;">
+                <canvas id="avatar-canvas"></canvas>
+                <div id="avatar-typing-bubble" class="typing-bubble">
+                    <span></span><span></span><span></span>
+                </div>
+                <img src="/static/Logo-Black-TM.png" alt="overlay"
+                    style="position: absolute; bottom: 30px; right: 83px; width: 185px; z-index: 1000;" />
+            </div>
+
+            <img id="muteIcon" src="{{ url_for('static', filename='mute.png') }}" alt="Muted"
+                style="position: fixed; bottom: 290px; right: 100px; width: 35px; z-index: 100; display: none;" />
+
+            <div id="avatar-container"></div>
+
+            <!--changes here 7/7/25-->
+            <div id="voice-waveform">
+                <canvas id="waveform-canvas" height="30"></canvas>
+            </div>
+
+
+            <div id="typing-indicator" style="display: none;" class="typing-indicator">
+                <span></span><span></span><span></span>
+            </div>
+            <!-- changes end -->
+
+
+            <!-- Input Area -->
+            <div class="bg-white p-4 border-t shadow-lg">
+                <div class="flex items-center">
+                    <input type="text" id="userInput"
+                        class="flex-1 border rounded-l-lg px-4 py-2 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                        placeholder="Ask a question about your document...">
+                    <button id="sendButton"
+                        class="send-button bg-blue-600 text-white px-6 py-2 rounded-r-lg hover:bg-blue-700 flex items-center">
+                        <img src="/static/send-button-logo.jpg" alt="Send" class="w-5 h-5 mr-2">
+                        Send
+                    </button>
+                    <button id="voiceInputBtn"
+                        class="ml-2 bg-green-200 px-6 py-2 rounded text-sm font-semibold text-green-700 hover:bg-green-300 items-center">
+                        🎙️ Speak
+                    </button>
+                    <button id="muteToggleBtn"
+                        class="ml-2 bg-gray-200 px-6 py-2 rounded text-sm font-semibold text-gray-700 hover:bg-gray-300 items-center">
+                        🔊 Voice On
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% include 'avatar.html' %}
+    <script>
+        let isMuted = false;
+        document.addEventListener('DOMContentLoaded', () => {
+
+            const fileInput = document.getElementById('fileInput');
+            const dropZone = document.getElementById('dropZone');
+            const chatContainer = document.getElementById('chatContainer');
+            const userInput = document.getElementById('userInput');
+            const sendButton = document.getElementById('sendButton');
+            const browseBtn = dropZone.querySelector('button');
+            const muteToggleBtn = document.getElementById('muteToggleBtn');
+            const muteIcon = document.getElementById('muteIcon');
+
+            // Persistence keys (stop storing chat locally; rely on database)
+            const CHAT_READY_KEY = 'chat_ready';
+            const CLIENT_ID_KEY = 'client_id';
+            let clientId = localStorage.getItem(CLIENT_ID_KEY);
+            if (!clientId) {
+                clientId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+                localStorage.setItem(CLIENT_ID_KEY, clientId);
+            }
+
+            function restoreChat() {
+                // No-op: messages are loaded from the server in auth_client.js
+                if (localStorage.getItem(CHAT_READY_KEY) === '1') {
+                    userInput.disabled = false;
+                    userInput.placeholder = "Ask your question...";
+                }
+            }
+
+            function clearChatStorage() { /* no-op: chat stored in DB now */ }
+
+            // Restore any previous chat on load
+            restoreChat();
+
+            function showAvatarTypingBubble() {
+                document.getElementById("avatar-typing-bubble").style.display = "flex";
+            }
+
+            function hideAvatarTypingBubble() {
+                document.getElementById("avatar-typing-bubble").style.display = "none";
+
+            }
+            function showSpinner() {
+                const overlay = document.getElementById('loadingSpinner')
+                if (overlay) overlay.classList.remove('hidden');
+            }
+            function hideSpinner() {
+                const overlay = document.getElementById('loadingSpinner');
+                if (overlay) {
+                    overlay.classList.add('hidden')
+                }
+            }
+
+            if (muteToggleBtn) {
+                muteToggleBtn.addEventListener('click', () => {
+                    isMuted = !isMuted;
+                    muteToggleBtn.innerText = isMuted ? '🔇 Voice Off' : '🔊 Voice On';
+
+                    if (muteIcon) {
+                        muteIcon.style.display = isMuted ? 'block' : 'none';
+                    }
+                    // Immediately stop any ongoing speech/audio when muting
+                    if (isMuted) {
+                        try { if (typeof stopSpeaking === 'function') stopSpeaking(); } catch (e) { }
+                        if (window.__playingAudio) { try { window.__playingAudio.pause(); window.__playingAudio.currentTime = 0; } catch (e) { } }
+                    }
+                });
+            }
+            else {
+                console.error('mute button not found')
+            }
+
+            let recognition;
+            const voiceInputBtn = document.getElementById('voiceInputBtn');
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                // recognition = new webkitSpeechRecognition();
+                recognition = new SpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.continuous = false;
+                recognition.interimresult = false;
+                recognition.disabled = false;
+                voiceInputBtn.textContent = '🎙️ Voice Input';
+                voiceInputBtn.addEventListener('click', () => {
+                    recognition.start();
+                    startWaveformVisualizer();
+                });
+                recognition.onstart = () => {
+                    voiceInputBtn.textContent = '🎙️ Listening...';
+                };
+                recognition.onend = () => {
+                    stopWaveformVisualizer();
+                    voiceInputBtn.textContent = '🎙️ Voice Input';
+                };
+                recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    addMessage('Speech recognition error: ' + event.error, 'bot');
+                };
+                recognition.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    // alert('You Said : '+transcript);
+                    userInput.value = transcript;
+                    sendMessage();
+                };
+
+            }
+            else {
+                voiceInputBtn.disabled = true;
+                voiceInputBtn.textContent = '🎤 Not Supported';
+            }
+
+            // File upload handling
+            dropZone.addEventListener('click', function () {
+                fileInput.click();
+            });
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('bg-gray-100');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('bg-gray-100');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('bg-gray-100');
+                const files = e.dataTransfer.files;
+                if (files.length) handleFile(files[0]);
+            });
+            fileInput.addEventListener('change', function () {
+                const files = fileInput.files;
+                if (files.length === 0) return;
+                const formData = new FormData();
+                for (let file of files) {
+                    for (let i = 0; i < files.length; i++) {
+                        formData.append('file', files[i]);
+                    }
+                }
+                showSpinner();
+                fetch('/upload?client_id=' + encodeURIComponent(clientId), {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        hideSpinner();
+                        if (data.success && data.ready) {
+                            addMessage(data.message, 'bot');
+                            userInput.disabled = false
+                            userInput.placeholder = "Ask your question..."
+                            localStorage.setItem(CHAT_READY_KEY, '1');
+                            alert("Files Uploaded and ready !")
+                        } else {
+                            addMessage(data.error || 'Upload failed', 'bot');
+                        }
+                    })
+                    .catch(err => {
+                        hideSpinner();
+                        console.error('Upload error:', err);
+                        alert('Upload error');
+                    });
+            });
+            browseBtn.addEventListener('click', function (e) {
+                e.stopPropagation(); // Just in case
+                fileInput.click();
+            });
+
+            const myButton = document.getElementById('sendButton');
+            console.log(myButton);
+            myButton.addEventListener('click', sendMessage);
+
+            function handleFile(file) {
+                const formData = new FormData();
+                for (let i = 0; i < files.length; i++) {
+                    formData.append('file', files[i]);
+                }
+
+                addMessage('Uploading file...', 'bot');
+
+                fetch('/upload?client_id=' + encodeURIComponent(clientId), {
+                    method: 'POST',
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            addMessage('File uploaded successfully! You can now ask questions about it.', 'bot');
+                            // Enable the input field
+                            userInput.disabled = false;
+                            userInput.placeholder = "Ask a question about your document...";
+                            localStorage.setItem(CHAT_READY_KEY, '1');
+                        } else {
+                            addMessage('Error: ' + data.error, 'bot');
+                        }
+                    })
+                    .catch(error => {
+                        addMessage('Error uploading file: ' + error, 'bot');
+                    });
+            }
+
+            // Chat functionality
+            function addMessage(text, sender) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${sender}-message`;
+                messageDiv.textContent = text;
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            function sendMessage() {
+                const message = userInput.value.trim();
+                console.log('Sending message:', message);
+                if (!message) return;
+
+                // cancel any ongoing speech/audio before sending a new question
+                try { if (typeof stopSpeaking === 'function') stopSpeaking(); } catch (e) { }
+                if (window.__playingAudio) { try { window.__playingAudio.pause(); window.__playingAudio.currentTime = 0; } catch (e) { } }
+
+                addMessage(message, 'user');
+                userInput.value = '';
+                userInput.disabled = true;  // Disable input while waiting for response
+
+                // showSpinner();
+                showAvatarTypingBubble();
+                fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ question: message, mute: isMuted, client_id: clientId })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        hideAvatarTypingBubble();
+                        console.log(data.response);
+                        console.log("Avatar speak() available:", typeof speak === "function");
+                        if (data.error) {
+                            addMessage(data.error, 'bot');
+                        } else {
+                            addMessage(data.response, 'bot');
+
+                            if (!isMuted) {
+                                if (typeof speak === "function") {
+                                    console.log("🗣️ Triggering avatar speech:", data.response);
+                                    try {
+                                        speak(data.response);
+                                    } catch (err) {
+                                        console.error("❌ Avatar speak() failed:", err);
+                                    }
+                                } else if (data.audio_url) {
+                                    console.log("🔊 Fallback audio playing");
+                                    try {
+                                        if (window.__playingAudio) { window.__playingAudio.pause(); window.__playingAudio.currentTime = 0; }
+                                        window.__playingAudio = new Audio(data.audio_url);
+                                        window.__playingAudio.play().catch(e => {
+                                            console.warn("audio playback failed : ", e);
+                                        });
+                                    } catch (e) { console.warn(e); }
+                                }
+                            } else {
+                                console.log("🔇 Voice is muted. No speech triggered.")
+                            }
+                        }
+                        userInput.disabled = false;  // Re-enable input after response
+                    })
+                    .catch(error => {
+                        hideSpinner();
+                        addMessage('Error: ' + error, 'bot');
+                        userInput.disabled = false;  // Re-enable input on error
+                    });
+            }
+
+            // Initialize input field based on previous readiness
+            const wasReady = localStorage.getItem(CHAT_READY_KEY) === '1';
+            userInput.disabled = !wasReady;
+            userInput.placeholder = wasReady ? "Ask your question..." : "Please upload a file first...";
+
+            sendButton.addEventListener('click', sendMessage);
+            userInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+        });
+
+        // waveform started :
+        let audioContext, analyser, microphone, dataArray, canvas, canvasCtx, animationId;
+        function startWaveformVisualizer() {
+            canvas = document.getElementById("waveform-canvas");
+            canvasCtx = canvas.getContext("2d");
+            navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                .then((stream) => {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    microphone = audioContext.createMediaStreamSource(stream);
+                    microphone.connect(analyser);
+                    analyser.fftSize = 2048;
+
+                    const bufferLength = analyser.fftSize;
+                    dataArray = new Uint8Array(bufferLength);
+
+                    document.getElementById("voice-waveform").classList.add("active");
+                    drawWaveform();
+                })
+                .catch((err) => {
+                    console.error("Microphone Cannot be Accessed : ", err);
+                });
+        }
+
+        function drawWaveform() {
+            animationId = requestAnimationFrame(drawWaveform);
+            analyser.getByteTimeDomainData(dataArray);
+
+            canvasCtx.fillStyle = "#f0f0f0";
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+            canvasCtx.lineWidth = 2;
+            canvasCtx.strokeStyle = "#007bff";
+
+            canvasCtx.beginPath();
+            const sliceWidth = canvas.width / dataArray.length;
+            let x = 0;
+
+            for (let i = 0; i < dataArray.length; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = (v * canvas.height) / 2;
+                if (i == 0) {
+                    canvasCtx.moveTo(x, y);
+                } else {
+                    canvasCtx.lineTo(x, y);
+                }
+                x += sliceWidth;
+            }
+            canvasCtx.lineTo(canvas.width, canvas.height / 2);
+            canvasCtx.stroke();
+        }
+
+        function stopWaveformVisualizer() {
+            document.getElementById("voice-waveform").classList.remove("active");
+            if (animationId) cancelAnimationFrame(animationId);
+            if (microphone) microphone.disconnect();
+            if (analyser) analyser.disconnect();
+            if (audioContext) audioContext.close();
+        }
+        //waveform ended 7/7/2025. 
+
+        // light dark mode start
+        const toggleBtn = document.getElementById("theme-toggle");
+        if (localStorage.getItem("theme") === "dark") {
+            document.body.classList.add("dark-mode");
+            toggleBtn.textContent = "☀️";
+        }
+        toggleBtn.addEventListener("click", () => {
+            document.body.classList.toggle("dark-mode");
+            if (document.body.classList.contains("dark-mode")) {
+                toggleBtn.textContent = "☀️";
+                localStorage.setItem("theme", "dark");
+            }
+            else {
+                toggleBtn.textContent = "🌙";
+                localStorage.setItem("theme", "light");
+            }
+        });
+        // light dark mode end
+
+    </script>
+
+    <!-- 2 avatars loading:  -->
+    <script type="module">
+        import * as THREE from 'https://esm.run/three@0.158.0';
+        import { GLTFLoader } from 'https://esm.run/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+        function loadAvatarPreview(containerId, glbPath) {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 1000);
+            camera.position.z = 2;
+            const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+
+            const container = document.getElementById(containerId);
+            if (!container) {
+                console.warn("🚫 Container not found:", containerId);
+                return;
+            }
+
+            renderer.setSize(160, 160);
+            renderer.setClearColor(0x000000, 0);
+            document.getElementById(containerId).appendChild(renderer.domElement);
+
+            const light = new THREE.DirectionalLight(0xffffff, 2);
+            light.position.set(0, 1, 1).normalize();
+            scene.add(light);
+
+            const loader = new GLTFLoader();
+            loader.load(glbPath, (gltf) => {
+                const avatar = gltf.scene;
+                if (containerId === "maleAvatarPreview") {
+                    avatar.scale.set(1.5, 1.5, 1.5);
+                    avatar.position.y = -2.35;
+                }
+                else {
+                    avatar.scale.set(1.5, 1.5, 1.5);
+                    avatar.position.y = -2.2;
+                }
+
+                avatar.rotation.y = 0.5;
+                scene.add(avatar);
+
+                function animate() {
+                    requestAnimationFrame(animate);
+                    avatar.rotation.y += 0.01;
+                    renderer.render(scene, camera);
+                }
+                animate();
+            });
+        }
+        window.addEventListener("DOMContentLoaded", () => {
+            loadAvatarPreview("maleAvatarPreview", "/static/684ff6e2227a9a0422181bcc.glb");
+            loadAvatarPreview("femaleAvatarPreview", "/static/686b8e703856a81c484ed51e.glb");
+        });
+    </script>
+
+
+    <div id="loadingSpinner"
+        class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-99999">
+        <div class="loader"></div>
+    </div>
+
+    <!-- 2 avatars selection begins here -->
+    <div id="avatarModal" class="fixed inset-0 bg-black bg-opacity-70 z-50 flex items-center justify-center">
+        <div class="flex gap-10 p-8 bg-white rounded-xl shadow-xl text-center">
+            <div class="avatar-option cursor-pointer" onclick="chooseAvatar('male')">
+                <div id="maleAvatarPreview" class="w-40 h-40"></div>
+                <p class="mt-2 font-semibold text-gray-800">Male Assistant</p>
+            </div>
+            <div class="avatar-option cursor-pointer" onclick="chooseAvatar('female')">
+                <div id="femaleAvatarPreview" class="w-40 h-40"></div>
+                <p class="mt-2 font-semibold text-gray-800">Female Assistant</p>
+            </div>
+        </div>
+    </div>
+    <!-- 2 avatars selection ends here -->
+    <script>
+        function chooseAvatar(gender) {
+            localStorage.setItem("selectedAvatar", gender);
+            document.getElementById("avatarModal").style.display = "none";
+
+            const wait = setInterval(() => {
+                if (window.setAvatarGender) {
+                    window.setAvatarGender(gender);
+                    clearInterval(wait);
+                }
+            }, 100);
+            console.log("🎯 Avatar chosen:", gender);
+        }
+        window.addEventListener("DOMContentLoaded", () => {
+            const saved = localStorage.getItem("selectedAvatar");
+
+            if (saved === "male" || saved === "female") {
+                document.getElementById("avatarModal").style.display = "none";
+
+                const interval = setInterval(() => {
+                    if (window.setAvatarGender) {
+                        console.log("📦 Auto-switching to stored avatar:", saved);
+                        window.setAvatarGender(saved);
+                        clearInterval(interval);
+                    }
+                }, 100);
+            }
+            else {
+                console.log("🔓 No saved avatar — waiting for user to choose");
+                document.getElementById("avatarModal").style.display = "flex";
+            }
+        });
+        document.getElementById("changeAvatarBtn").addEventListener("click", () => {
+            localStorage.removeItem("selectedAvatar");
+            location.reload();
+        });
+    </script>
+</body>
+<script>
+    // Inject Supabase config for auth_client.js
+    window.__SUPABASE_URL__ = "{{ supabase_url or '' }}";
+    window.__SUPABASE_ANON__ = "{{ supabase_anon or '' }}";
+</script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="/static/auth_client.js"></script>
+<script>
+    (function () {
+        const btn = document.getElementById('logoutBtnSide+');
+        if (!btn) return;
+        btn.addEventListener('click', async function () {
+            try {
+                if (window.supabase && window.__SUPABASE_URL__ && window.__SUPABASE_ANON__) {
+                    const supa = window.supabase.createClient(window.__SUPABASE_URL__, window.__SUPABASE_ANON__);
+                    await supa.auth.signOut();
+                }
+            } catch (e) { }
+            try { localStorage.removeItem('sb_access_token'); } catch (e) { }
+            window.location.href = '/';
+        });
+    })();
+</script>
+
+</html>
