@@ -3,102 +3,146 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sign in | HR Assistant</title>
+  <title>Authenticate | HR Assistant</title>
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <script>
     window.__SUPABASE_URL__ = "{{ supabase_url or '' }}";
     window.__SUPABASE_ANON__ = "{{ supabase_anon or '' }}";
   </script>
+  <style>
+    /* Tab buttons - subtle highlight */
+    .tab-btn{
+      display: flex; align-items: center; justify-content: center;
+      flex: 1 1 0%; padding: 0.5rem 0.75rem; text-align: center;
+      border-radius: 0.5rem; font-weight: 600; cursor: pointer;
+      transition: all .2s ease; border: 1px solid rgba(0,0,0,.06);
+      box-shadow: 0 1px 2px rgba(0,0,0,.08);
+    }
+    .tab-active{
+      background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+      color: #fff; box-shadow: 0 3px 8px rgba(37,99,235,.35);
+      border-color: rgba(37,99,235,.8);
+    }
+    .tab-inactive{ background:#f3f4f6; color:#374151; }
+    .tab-inactive:hover{ background:#e5e7eb; box-shadow:0 2px 6px rgba(0,0,0,.12); }
+    .glass{ backdrop-filter: blur(6px); background: rgba(255,255,255,0.8); }
+    .bg-grad{ background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); }
+  </style>
   <script>
     document.addEventListener('DOMContentLoaded', async () => {
       const url = window.__SUPABASE_URL__;
       const key = window.__SUPABASE_ANON__;
-      if (!url || !key) {
-        document.getElementById('status').textContent = 'Missing Supabase configuration';
-        return;
-      }
       const supa = window.supabase.createClient(url, key);
+
       const statusEl = document.getElementById('status');
-      const emailEl = document.getElementById('email');
-      const passEl = document.getElementById('pass');
-      const loginBtn = document.getElementById('loginBtn');
-      const signupBtn = document.getElementById('signupBtn');
+      const tabs = { signup: document.getElementById('tab-signup'), login: document.getElementById('tab-login') };
+      const panels = { signup: document.getElementById('panel-signup'), login: document.getElementById('panel-login') };
+
+      function setTab(which){
+        const other = which === 'signup' ? 'login' : 'signup';
+        tabs[which].classList.add('tab-active'); tabs[which].classList.remove('tab-inactive');
+        tabs[other].classList.remove('tab-active'); tabs[other].classList.add('tab-inactive');
+        panels[which].classList.remove('hidden'); panels[other].classList.add('hidden');
+        statusEl.textContent = '';
+      }
+
+      // Default to SIGN UP (clear guidance for first-time users)
+      setTab('signup');
+
+      tabs.signup.onclick = () => setTab('signup');
+      tabs.login.onclick = () => setTab('login');
 
       async function checkSession(){
         const { data: { session } } = await supa.auth.getSession();
-        if (session) {
-          window.location.href = '/chat';
-        }
+        if (session) window.location.href = '/chat';
       }
 
-      loginBtn.onclick = async () => {
-        const email = emailEl.value.trim();
-        const password = passEl.value.trim();
-        if (!email || !password) { statusEl.textContent = 'Enter email and password'; return; }
-        statusEl.textContent = 'Signing in...';
-        const { error } = await supa.auth.signInWithPassword({ email, password });
-        if (error) { statusEl.textContent = error.message; return; }
-        window.location.href = '/chat';
-      };
-
-      signupBtn.onclick = async () => {
-        const email = emailEl.value.trim();
-        const password = passEl.value.trim();
-        if (!email || !password) { statusEl.textContent = 'Enter email and password'; return; }
-        statusEl.textContent = 'Signing up...';
-        try {
+      // SIGN UP flow
+      document.getElementById('signupBtn').onclick = async () => {
+        const email = document.getElementById('su_email').value.trim();
+        const password = document.getElementById('su_pass').value.trim();
+        if (!email || !password){ statusEl.textContent = 'Please enter email and password to sign up.'; return; }
+        statusEl.textContent = 'Creating your account...';
+        try{
           const { data, error } = await supa.auth.signUp({
             email,
             password,
             options: { emailRedirectTo: window.location.origin + '/chat' }
           });
-          if (error) {
-            // Common case when Email provider is disabled in Supabase
-            const msg = (error && error.message || '').toLowerCase();
-            if (msg.includes('email provider is disabled') || msg.includes('identity provider is disabled')) {
+          if (error){
+            const msg = (error.message||'').toLowerCase();
+            if (msg.includes('email provider is disabled') || msg.includes('identity provider is disabled')){
               statusEl.textContent = 'Enable Email provider in Supabase → Authentication → Providers → Email.';
               return;
             }
-            statusEl.textContent = error.message;
-            return;
+            statusEl.textContent = error.message; return;
           }
-          // If confirmations are disabled, session may be created immediately; otherwise try sign-in
-          const hasSession = !!(data && data.session);
-          if (hasSession) { window.location.href = '/chat'; return; }
+          // If confirmations are off, a session may be returned
+          if (data && data.session){ window.location.href = '/chat'; return; }
+          // Otherwise, attempt immediate sign-in (works when confirmation off)
           const si = await supa.auth.signInWithPassword({ email, password });
-          if (si.error) {
-            statusEl.textContent = 'Account created. Now sign in with your password.';
+          if (si.error){
+            statusEl.textContent = 'Account created. Please sign in with your password.';
+            setTab('login');
             return;
           }
           window.location.href = '/chat';
-        } catch (e) {
-          statusEl.textContent = String(e);
-        }
+        }catch(e){ statusEl.textContent = String(e); }
       };
 
-      // If already logged in, go to chat
+      // SIGN IN flow
+      document.getElementById('loginBtn').onclick = async () => {
+        const email = document.getElementById('li_email').value.trim();
+        const password = document.getElementById('li_pass').value.trim();
+        if (!email || !password){ statusEl.textContent = 'Please enter email and password to sign in.'; return; }
+        statusEl.textContent = 'Signing you in...';
+        const { error } = await supa.auth.signInWithPassword({ email, password });
+        if (error){ statusEl.textContent = error.message; return; }
+        window.location.href = '/chat';
+      };
+
       checkSession();
     });
   </script>
 </head>
-<body class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-  <div class="w-full max-w-md bg-white rounded-xl shadow p-6">
-    <h1 class="text-2xl font-semibold mb-1 text-center">Welcome</h1>
-    <p class="text-sm text-gray-500 mb-6 text-center">Sign up or sign in to continue to chat</p>
-
-    <label class="block text-sm mb-1">Email</label>
-    <input id="email" type="email" class="w-full border rounded px-3 py-2 mb-3" placeholder="you@example.com" />
-
-    <label class="block text-sm mb-1">Password</label>
-    <input id="pass" type="password" class="w-full border rounded px-3 py-2 mb-4" placeholder="••••••••" />
-
-    <div class="flex gap-2">
-      <button id="loginBtn" class="flex-1 bg-blue-600 text-white py-2 rounded">Sign in</button>
-      <button id="signupBtn" class="flex-1 bg-green-600 text-white py-2 rounded">Sign up</button>
+<body class="min-h-screen bg-grad flex items-center justify-center p-6">
+  <div class="w-full max-w-2xl grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="hidden md:flex items-center justify-center text-white">
+      <div>
+        <h1 class="text-3xl font-bold mb-3">Welcome to HR Document Assistant</h1>
+        <p class="opacity-90">Upload policy/HR documents and chat with them anywhere. First time here? <span class="font-semibold">Create your account</span>. Already have one? Just <span class="font-semibold">sign in</span>.</p>
+      </div>
     </div>
 
-    <div id="status" class="text-sm text-gray-600 mt-4 text-center"></div>
+    <div class="glass rounded-2xl shadow-xl p-6 md:p-8">
+      <div class="flex gap-2 mb-4">
+        <button id="tab-signup" class="tab-btn tab-active">Sign up</button>
+        <button id="tab-login" class="tab-btn tab-inactive">Sign in</button>
+      </div>
+
+      <!-- Sign up panel (default) -->
+      <div id="panel-signup">
+        <p class="text-sm text-gray-600 mb-4">New here? Create your account to get started.</p>
+        <label class="block text-sm mb-1">Email</label>
+        <input id="su_email" type="email" class="w-full border rounded px-3 py-2 mb-3" placeholder="you@example.com" />
+        <label class="block text-sm mb-1">Password</label>
+        <input id="su_pass" type="password" class="w-full border rounded px-3 py-2 mb-4" placeholder="••••••••" />
+        <button id="signupBtn" class="w-full bg-green-600 hover:bg-green-700 text-white py-2 rounded shadow">Create account</button>
+      </div>
+
+      <!-- Sign in panel -->
+      <div id="panel-login" class="hidden">
+        <p class="text-sm text-gray-600 mb-4">Already have an account? Sign in to continue.</p>
+        <label class="block text-sm mb-1">Email</label>
+        <input id="li_email" type="email" class="w-full border rounded px-3 py-2 mb-3" placeholder="you@example.com" />
+        <label class="block text-sm mb-1">Password</label>
+        <input id="li_pass" type="password" class="w-full border rounded px-3 py-2 mb-4" placeholder="••••••••" />
+        <button id="loginBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded shadow">Sign in</button>
+      </div>
+
+      <div id="status" class="text-sm text-gray-700 mt-4 text-center"></div>
+    </div>
   </div>
 </body>
 </html>
