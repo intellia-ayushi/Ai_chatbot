@@ -924,6 +924,7 @@ def upload_files():
                 storage_url = upload_file_to_b2(filepath, object_key)
                 persist_path = storage_url or filepath
                 print('[UPLOAD] Persist path stored in DB:', persist_path)
+                token = extract_bearer_token(request)
                 add_document(token, user_id=user_id, path=persist_path, filename=filename)
             except Exception as e:
                 print("[DB] add_document failed:", e)
@@ -991,8 +992,21 @@ def ask_question():
 
     # Always load stored document paths from DB for this authenticated user
     try:
-        user_docs = list_user_documents(user_id)
-        all_files = [doc.get('path') for doc in (user_docs or []) if doc.get('path')]
+        token = extract_bearer_token(request)
+        user_docs = list_user_documents(token, user_id)
+        print(f"[ASK] DB returned {len(user_docs or [])} document entries for user {user_id}")
+        all_files = [doc.get('path') for doc in (user_docs or []) if doc and doc.get('path')]
+        # Deduplicate paths while preserving order
+        seen_paths = set()
+        deduped = []
+        for p in all_files:
+            if p not in seen_paths:
+                seen_paths.add(p)
+                deduped.append(p)
+        all_files = deduped
+        print(f"[ASK] Using {len(all_files)} unique document paths from DB")
+        for idx, p in enumerate(all_files):
+            print(f"[ASK] doc[{idx+1}]: {p}")
     except Exception as e:
         print('[DB] list_user_documents failed:', e)
         all_files = []
@@ -1020,9 +1034,28 @@ def ask_question():
             local_path = ensure_local_file(filepath)
             if local_path != filepath:
                 print('[ASK] Downloaded remote file to temp path:', local_path)
-            combined_text += extract_text_from_pdf(local_path) + "\n\n"
+            # Try pdfplumber first
+            extracted = extract_text_from_pdf(local_path)
+            if not extracted or len(extracted.strip()) == 0:
+                print('[ASK] pdfplumber yielded no text, trying PyPDF2 fallback...')
+                try:
+                    with open(local_path, 'rb') as f:
+                        reader = PdfReader(f)
+                        buf = []
+                        for pg in reader.pages:
+                            buf.append(pg.extract_text() or '')
+                        extracted = '\n'.join(buf)
+                except Exception as e2:
+                    print('[ASK] PyPDF2 fallback failed:', e2)
+                    extracted = ''
+            if extracted:
+                print(f"[ASK] Extracted {len(extracted)} chars from: {os.path.basename(local_path)}")
+                combined_text += extracted + "\n\n"
+            else:
+                print(f"[ASK] No text extracted from: {os.path.basename(local_path)}")
         except Exception as e:
             print(f"[ERROR] Failed to extract text from {filepath}: {e}")
+    print(f"[ASK] Total combined context size: {len(combined_text)} chars from {len(all_files)} docs")
     # Initialize chat context for this request and keep session in sync
     try:
         chatbot.load_combined_text(combined_text)
@@ -1119,7 +1152,6 @@ def list_documents_endpoint():
     if auth_err:
         return jsonify(auth_err), 401
     try:
-        # docs = list_user_documents(user_id)
         token = extract_bearer_token(request)
         docs = list_user_documents(token, user_id)
         return jsonify({'documents': docs or []})
