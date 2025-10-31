@@ -20,10 +20,11 @@ def ensure_tables():
     pass
 
 
-def add_document(jwt: str, user_id: str, path: str, filename: str) -> Optional[Dict[str, Any]]:
+def add_document(jwt: str, user_id: str, path: str, filename: str, display_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Add a document for a user: Save path+filename as a new entry in the user's documents array.
-    If this is the first upload for the user, create a new row. Requires the user's JWT for RLS insert!
+    Optionally persist a human-friendly display_name (original filename uploaded by the user).
+    Requires the user's JWT for RLS insert.
     """
     sb = get_supabase_client()
     try:
@@ -32,9 +33,12 @@ def add_document(jwt: str, user_id: str, path: str, filename: str) -> Optional[D
         docs = []
         if resp.data and len(resp.data) > 0 and isinstance(resp.data[0].get('documents'), list):
             docs = resp.data[0]['documents']
-        docs.append({'path': path, 'filename': filename})
+        doc_rec = {'path': path, 'filename': filename}
+        if display_name:
+            doc_rec['display_name'] = display_name
+        docs.append(doc_rec)
         upsert_resp = sb.table('documents').upsert({'user_id': user_id, 'documents': docs}, on_conflict='user_id').execute()
-        print(f'[DEBUG][add_document] user_id={user_id}, documents array now: {docs}')
+        print(f'[DEBUG][add_document] user_id={user_id}, appended: {doc_rec}')
         return (upsert_resp.data or [None])[0]
     except Exception as e:
         print(f'[ERROR][add_document] Failed for user_id={user_id}: {e}')

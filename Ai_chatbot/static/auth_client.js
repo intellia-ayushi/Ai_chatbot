@@ -64,6 +64,33 @@
       return originalFetch(input, init);
     };
 
+    // helper: render docs list
+    async function refreshDocsUI(){
+      try{
+        const dr = await originalFetch('/documents', { headers: { Authorization: 'Bearer ' + accessToken } });
+        const dj = await dr.json();
+        const docs = (dj && dj.documents) || [];
+        const listEl = document.getElementById('docList');
+        if (listEl){
+          listEl.innerHTML = '';
+          docs.forEach(d => {
+            const name = (d && (d.display_name || d.filename || (d.path ? d.path.split('/').pop() : ''))) || '';
+            const li = document.createElement('li');
+            li.className = 'truncate font-semibold text-white';
+            li.title = name;
+            li.textContent = '• ' + name;
+            listEl.appendChild(li);
+          });
+        }
+        const userInput = document.getElementById('userInput');
+        if (userInput){
+          if (docs.length > 0){ userInput.disabled = false; userInput.placeholder = 'Ask your question...'; }
+          else { userInput.disabled = true; userInput.placeholder = 'Please upload a file first...'; }
+        }
+      }catch(e){ console.warn('[auth] refreshDocsUI failed:', e); }
+    }
+    window.refreshDocsUI = refreshDocsUI;
+
     // 🟢 Sync user profile on backend
     try {
       console.log("[Chat Debug] Syncing user profile...");
@@ -82,27 +109,8 @@
       const userMsgs = (uj && uj.messages) || [];
       console.log('[Chat Debug] userMsgs loaded from DB:', userMsgs);
 
-      // Check if user has any documents
-      let hasDocs = false;
-      let docs = [];
-      try {
-        const dr = await originalFetch('/documents', { headers: { Authorization: 'Bearer ' + accessToken } });
-        const dj = await dr.json();
-        docs = (dj && dj.documents) || [];
-        hasDocs = docs.length > 0;
-      } catch (e) {}
-
-      // Now, after checking for docs, set chat input enabled/disabled globally
-      const userInput = document.getElementById('userInput');
-      if (userInput) {
-        if (hasDocs) {
-          userInput.disabled = false;
-          userInput.placeholder = 'Ask your question...';
-        } else {
-          userInput.disabled = true;
-          userInput.placeholder = 'Please upload a file first...';
-        }
-      }
+      // Render docs list and enable input
+      await refreshDocsUI();
 
       // Load and render messages to chat UI
       const container = document.getElementById('chatContainer');
@@ -119,18 +127,6 @@
           });
           container.scrollTop = container.scrollHeight;
           console.log('Messages appended to DOM:', container.children.length);
-        } else if (!hasDocs) {
-          container.innerHTML = '';
-          const div = document.createElement('div');
-          div.className = 'message bot-message';
-          div.textContent = 'Please upload document first.';
-          container.appendChild(div);
-        } else {
-          container.innerHTML = '';
-          const div = document.createElement('div');
-          div.className = 'bot-message message';
-          div.textContent = 'No previous chat found for this user.';
-          container.appendChild(div);
         }
       }
     } catch (e) {

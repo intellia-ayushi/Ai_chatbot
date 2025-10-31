@@ -903,6 +903,7 @@ def upload_files():
     for file in files:
         if allowed_file(file.filename):  
             filename = str(uuid.uuid4()) + os.path.splitext(file.filename)[1]
+            original_name = file.filename or filename
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
             print('[UPLOAD] Saved locally:', filepath)
@@ -925,7 +926,7 @@ def upload_files():
                 persist_path = storage_url or filepath
                 print('[UPLOAD] Persist path stored in DB:', persist_path)
                 token = extract_bearer_token(request)
-                add_document(token, user_id=user_id, path=persist_path, filename=filename)
+                add_document(token, user_id=user_id, path=persist_path, filename=filename, display_name=original_name)
             except Exception as e:
                 print("[DB] add_document failed:", e)
 

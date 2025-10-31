@@ -380,15 +380,13 @@
         }
 
         #changeAvatarBtn {
-            position: absolute;
-            top: 528px;
-            right: 1328px;
-            z-index: 0;
+            position: static;
+            width: 100%;
         }
 
         /* Logout just below Change Assistant */
         #logoutBtnSide {
-            position: absolute;
+
             top: 568px;
             /* 40px below changeAvatarBtn */
             right: 1328px;
@@ -422,13 +420,13 @@
 
     <div class="flex h-screen">
         <!-- Sidebar -->
-        <div class="sidebar w-64 p-6 text-white">
+        <div class="sidebar w-64 p-6 text-white flex flex-col overflow-y-auto">
             <div class="flex items-center mb-8">
                 <img src="/static/chatbot-logo.jpg" alt="HR Assistant Logo"
                     class="w-12 h-12 rounded-full mr-3 shadow-lg">
                 <h1 class="text-xl font-bold header-text">HR Document Assistant</h1>
             </div>
-
+            <!-- Footer actions will be moved to bottom via mt-auto -->
             <div class="mb-8">
                 <div class="custom-file-upload" id="dropZone">
                     <img src="/static/pdf-upload-logo.png" alt="Upload" class="w-16 h-16 mx-auto mb-4 upload-icon">
@@ -442,6 +440,14 @@
                     </button>
                 </div>
             </div>
+            <div class="mt-4">
+                <h3 class="text-sm text-gray-200 mb-2">Your uploaded documents</h3>
+                <ul id="docList" class="list-disc pl-4 text-xs text-gray-100 space-y-1 max-h-48 overflow-auto pr-1">
+                    <!-- populated by auth_client.js -->
+                </ul>
+            </div>
+
+            <div class="mt-6"></div>
 
             <div class="mt-auto text-sm text-gray-300">
                 <p class="mb-2">Supported formats (multiple files allowed):</p>
@@ -450,26 +456,13 @@
                     <li>DOC/DOCX Documents (.doc, .docx)</li>
                     <li>Images (JPG, JPEG, PNG, BMP, TIFF, WEBP)</li>
                 </ul>
-            </div>
-
-            <!-- Buttons Section -->
-            <div>
-                <div style="text-align: left;">
-                    <button id="changeAvatarBtn"
-                        class="bg-white text-black hover:text-gray-700 border border-gray-400 hover:border-gray-600 px-7 py-2 rounded text-sm font-semibold shadow transition duration-200"
-                        style="font-weight: 600;">
-                        🔄 Change Assistant
-                    </button>
-                </div>
-
-
-                <div style="margin-top: 80px;">
-                    <button id="logoutBtnSide+"
-                        class="w-full bg-red-600 hover:bg-red-600 text-white px-4 py-2 rounded text-sm shadow">
+                <div class="pt-4 mt-6 border-t border-white border-opacity-20">
+                    <button id="changeAvatarBtn" class="change-avatar-btn w-full mb-3">🔄 Change Assistant</button>
+                    <button id="logoutBtnSide"
+                        class="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm shadow">
                         Logout
                     </button>
                 </div>
-
             </div>
         </div>
 
@@ -684,6 +677,7 @@
                             userInput.disabled = false
                             userInput.placeholder = "Ask your question..."
                             localStorage.setItem(CHAT_READY_KEY, '1');
+                            try { if (window.refreshDocsUI) window.refreshDocsUI(); } catch (e) { }
                             alert("Files Uploaded and ready !")
                         } else {
                             addMessage(data.error || 'Upload failed', 'bot');
@@ -1018,7 +1012,7 @@
 <script src="/static/auth_client.js"></script>
 <script>
     (function () {
-        const btn = document.getElementById('logoutBtnSide+');
+        const btn = document.getElementById('logoutBtnSide');
         if (!btn) return;
         btn.addEventListener('click', async function () {
             try {
