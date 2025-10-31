@@ -924,7 +924,7 @@ def upload_files():
                 storage_url = upload_file_to_b2(filepath, object_key)
                 persist_path = storage_url or filepath
                 print('[UPLOAD] Persist path stored in DB:', persist_path)
-                add_document(user_id=user_id, path=persist_path, filename=filename)
+                add_document(token, user_id=user_id, path=persist_path, filename=filename)
             except Exception as e:
                 print("[DB] add_document failed:", e)
 
@@ -1119,7 +1119,9 @@ def list_documents_endpoint():
     if auth_err:
         return jsonify(auth_err), 401
     try:
-        docs = list_user_documents(user_id)
+        # docs = list_user_documents(user_id)
+        token = extract_bearer_token(request)
+        docs = list_user_documents(token, user_id)
         return jsonify({'documents': docs or []})
     except Exception as e:
         return jsonify({'error': str(e)}), 500

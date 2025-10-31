@@ -76,10 +76,7 @@ def get_public_base() -> str:
     return _env('B2_PUBLIC_URL', 'B2_ENDPOINT', 'B2_S3_ENDPOINT')
 
 
-from typing import Optional
-
-def upload_file_to_b2(local_path: str, object_key: str) -> Optional[str]:
-
+def upload_file_to_b2(local_path: str, object_key: str) -> str | None:
     """Upload a file to Backblaze B2 using native b2sdk only and return public URL."""
     if not b2:
         print('[B2] b2sdk is not installed')

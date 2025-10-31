@@ -75,71 +75,66 @@
       console.warn("[auth] Profile sync failed:", e);
     }
 
-    // 🟢 Fetch and render previous user messages
+    // Load per-user messages (aggregated) and render if present
     try {
-      console.log("[Chat Debug] Fetching user messages...");
-      const ur = await originalFetch("/user/messages", {
-        headers: { Authorization: "Bearer " + accessToken },
-      });
-
-      console.log("[Chat Debug] /user/messages fetch completed:", ur.status);
-      if (!ur.ok) {
-        console.warn("[Chat Debug] Non-OK response from /user/messages:", ur.status);
-      }
-
+      const ur = await originalFetch('/user/messages', { headers: { Authorization: 'Bearer ' + accessToken } });
       const uj = await ur.json();
-      console.log("[Chat Debug] /user/messages JSON parsed:", uj);
-
       const userMsgs = (uj && uj.messages) || [];
-      console.log("[Chat Debug] userMsgs loaded:", userMsgs);
+      console.log('[Chat Debug] userMsgs loaded from DB:', userMsgs);
 
-      // 🟢 Fetch user documents (optional)
+      // Check if user has any documents
       let hasDocs = false;
+      let docs = [];
       try {
-        const dr = await originalFetch("/documents", {
-          headers: { Authorization: "Bearer " + accessToken },
-        });
+        const dr = await originalFetch('/documents', { headers: { Authorization: 'Bearer ' + accessToken } });
         const dj = await dr.json();
-        hasDocs = Array.isArray(dj?.documents) && dj.documents.length > 0;
-      } catch (e) {
-        console.warn("[Chat Debug] Document check failed:", e);
+        docs = (dj && dj.documents) || [];
+        hasDocs = docs.length > 0;
+      } catch (e) {}
+
+      // Now, after checking for docs, set chat input enabled/disabled globally
+      const userInput = document.getElementById('userInput');
+      if (userInput) {
+        if (hasDocs) {
+          userInput.disabled = false;
+          userInput.placeholder = 'Ask your question...';
+        } else {
+          userInput.disabled = true;
+          userInput.placeholder = 'Please upload a file first...';
+        }
       }
 
-      // 🟢 Render to DOM
-      const container = document.getElementById("chatContainer");
-      if (!container) {
-        console.warn("[Chat Debug] No chatContainer found in DOM.");
-        return;
-      }
-
-      container.innerHTML = "";
-
-      if (Array.isArray(userMsgs) && userMsgs.length > 0) {
-        console.log("[Chat Debug] Rendering", userMsgs.length, "messages...");
-        userMsgs.forEach((m) => {
-          const role = (m.role || "assistant").toLowerCase();
-          const text = m.content || "";
-          const div = document.createElement("div");
-          div.className = `message ${role === "user" ? "user-message" : "bot-message"}`;
-          div.textContent = text;
+      // Load and render messages to chat UI
+      const container = document.getElementById('chatContainer');
+      if (container) {
+        if (Array.isArray(userMsgs) && userMsgs.length > 0) {
+          container.innerHTML = '';
+          userMsgs.forEach(m => {
+            const role = (m.role || 'assistant').toLowerCase();
+            const text = m.content || '';
+            const div = document.createElement('div');
+            div.className = `message ${role === 'user' ? 'user-message' : 'bot-message'}`;
+            div.textContent = text;
+            container.appendChild(div);
+          });
+          container.scrollTop = container.scrollHeight;
+          console.log('Messages appended to DOM:', container.children.length);
+        } else if (!hasDocs) {
+          container.innerHTML = '';
+          const div = document.createElement('div');
+          div.className = 'message bot-message';
+          div.textContent = 'Please upload document first.';
           container.appendChild(div);
-        });
-        container.scrollTop = container.scrollHeight;
-      } else if (!hasDocs) {
-        const div = document.createElement("div");
-        div.className = "message bot-message";
-        div.textContent = "Please upload a document first.";
-        container.appendChild(div);
-      } else {
-        const div = document.createElement("div");
-        div.className = "bot-message message";
-        div.textContent = "No previous chat found for this user.";
-        container.appendChild(div);
+        } else {
+          container.innerHTML = '';
+          const div = document.createElement('div');
+          div.className = 'bot-message message';
+          div.textContent = 'No previous chat found for this user.';
+          container.appendChild(div);
+        }
       }
-
-      console.log("[Chat Debug] Render complete.");
     } catch (e) {
-      console.error("[Chat Debug] Error while fetching messages:", e);
+      console.warn('[auth] chat bootstrap failed:', e);
     }
   })();
 })();

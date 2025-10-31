@@ -20,16 +20,40 @@ def ensure_tables():
     pass
 
 
-def add_document(user_id: str, path: str, filename: str) -> Optional[Dict[str, Any]]:
+def add_document(jwt: str, user_id: str, path: str, filename: str) -> Optional[Dict[str, Any]]:
+    """
+    Add a document for a user: Save path+filename as a new entry in the user's documents array.
+    If this is the first upload for the user, create a new row. Requires the user's JWT for RLS insert!
+    """
     sb = get_supabase_client()
-    resp = sb.table('documents').insert({'user_id': user_id, 'path': path, 'filename': filename}).execute()
-    return (resp.data or [None])[0]
+    try:
+        sb.postgrest.auth(jwt)  # CRUCIAL: use user's JWT for RLS-upsert!
+        resp = sb.table('documents').select('documents').eq('user_id', user_id).execute()
+        docs = []
+        if resp.data and len(resp.data) > 0 and isinstance(resp.data[0].get('documents'), list):
+            docs = resp.data[0]['documents']
+        docs.append({'path': path, 'filename': filename})
+        upsert_resp = sb.table('documents').upsert({'user_id': user_id, 'documents': docs}, on_conflict='user_id').execute()
+        print(f'[DEBUG][add_document] user_id={user_id}, documents array now: {docs}')
+        return (upsert_resp.data or [None])[0]
+    except Exception as e:
+        print(f'[ERROR][add_document] Failed for user_id={user_id}: {e}')
+        return None
 
-
-def list_user_documents(user_id: str) -> List[Dict[str, Any]]:
+def list_user_documents(jwt: str, user_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all document info for the user as a list (from the single array row); pass jwt for RLS protection.
+    """
     sb = get_supabase_client()
-    resp = sb.table('documents').select('*').eq('user_id', user_id).order('created_at', desc=True).execute()
-    return resp.data or []
+    try:
+        sb.postgrest.auth(jwt)
+        resp = sb.table('documents').select('documents').eq('user_id', user_id).execute()
+        if resp.data and len(resp.data) > 0 and isinstance(resp.data[0].get('documents'), list):
+            print(f'[DEBUG][list_user_documents] user_id={user_id}, documents: {resp.data[0]["documents"]}')
+            return resp.data[0]['documents']
+    except Exception as e:
+        print(f'[ERROR][list_user_documents] Could not fetch documents for user_id={user_id}: {e}')
+    return []
 
 
 def create_chat(user_id: str, title: str) -> Optional[Dict[str, Any]]:
