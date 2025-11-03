@@ -793,9 +793,13 @@ class EnhancedMultiFormatChatbot:
             return "Please load a file first using 'load <file_path>' command."
         
         try:
-            # Check if the question is about a specific year
-            specific_year_match = re.search(r'(20\d{2})', question.lower())
+            # Check if the question is about a specific year and/or a policy-related topic
+            q_lower = question.lower()
+            specific_year_match = re.search(r'(20\d{2})', q_lower)
             is_general_query = not specific_year_match
+            is_policy_query = any(k in q_lower for k in [
+                'leave', 'policy', 'holiday', 'calendar', 'official holiday'
+            ])
 
             # Prepare combined context
             base_text_for_filter = getattr(self, 'text_context', None) or self.content or ""
@@ -803,18 +807,20 @@ class EnhancedMultiFormatChatbot:
             # Import helpers
             from content_filter import filter_latest_year_content, get_latest_year_prompt
 
-            # Always compute latest-year filtered content (used by both general and specific queries)
-            filtered_content, latest_year = filter_latest_year_content(base_text_for_filter)
-            if is_general_query and latest_year:
-                # Modify question to steer the model
-                question = f"{question} for {latest_year} ONLY"
-                print(f"[FILTER] Modified question to: {question}")
-            # Cache filtered content for extraction and prompts
+            # Compute latest-year filtered content only for policy-style queries
+            filtered_content, latest_year = ("", None)
+            if is_policy_query:
+                filtered_content, latest_year = filter_latest_year_content(base_text_for_filter)
+                if is_general_query and latest_year:
+                    # Modify question to steer the model
+                    question = f"{question} for {latest_year} ONLY"
+                    print(f"[FILTER] Modified question to: {question}")
+            # Cache filtered content for extraction and prompts (or empty when not policy)
             self.filtered_content = filtered_content or ""
 
             # If the user asked for a specific leave type count, answer concisely without the model
             try:
-                from content_filter import extract_leave_days, detect_leave_type_from_question
+                from content_filter import extract_leave_days, detect_leave_type_from_question, extract_holiday_info, extract_max_leave_type, list_official_holidays, extract_remarks
                 ql = question.lower()
                 detected_type = detect_leave_type_from_question(ql)
                 if detected_type:
@@ -822,11 +828,45 @@ class EnhancedMultiFormatChatbot:
                     days = extract_leave_days(self.filtered_content, detected_type) or extract_leave_days(base_text_for_filter, detected_type)
                     if days:
                         return days
+                # Holidays: date/weekday queries
+                holiday_name = 'diwali' if 'diwali' in ql else ('christmas' if 'christmas' in ql else None)
+                if holiday_name:
+                    # Specific year override if present in question
+                    yr_match = re.search(r'(20\d{2})', ql)
+                    specified_year = yr_match.group(1) if yr_match else (latest_year if is_general_query else None)
+                    date_str, weekday = extract_holiday_info(self.filtered_content or base_text_for_filter, holiday_name.capitalize(), specified_year)
+                    if 'day of the week' in ql or 'which day' in ql or 'weekday' in ql:
+                        if weekday:
+                            return weekday
+                    if 'when' in ql or 'date' in ql or 'kab' in ql:
+                        if date_str:
+                            return date_str
+                # Which leave type has highest days
+                if ('which' in ql or 'highest' in ql or 'max' in ql) and 'leave' in ql:
+                    ltype, num = extract_max_leave_type(self.filtered_content or base_text_for_filter)
+                    if ltype and num is not None:
+                        return f"{ltype.capitalize()} Leave: {num} days"
+                # Are there any holidays apart from X and Y
+                if 'apart from' in ql or 'other than' in ql:
+                    hols = list_official_holidays(self.filtered_content or base_text_for_filter)
+                    # If only Diwali and Christmas are known
+                    other_hols = [h for h in hols if h.lower() not in ql]
+                    if len(hols) <= 2 and not other_hols:
+                        return 'No'
+                # Purpose of planned leave (remarks)
+                if 'purpose' in ql and 'planned' in ql:
+                    remarks = extract_remarks(self.filtered_content or base_text_for_filter)
+                    if remarks:
+                        # Return the key sentence mentioning planned leave if present
+                        for sent in re.split(r'(?<=[.!?])\s+', remarks):
+                            if 'planned' in sent.lower():
+                                return sent.strip()
+                        return remarks.strip()
             except Exception as _e:
                 pass
             
             # Enhanced question processing with year-specific instructions and content filtering
-            if is_general_query and 'latest_year' in locals() and latest_year:
+            if is_policy_query and is_general_query and 'latest_year' in locals() and latest_year:
                 # Determine the base text to operate on (combined docs take precedence)
                 base_text = getattr(self, 'text_context', None) or self.content or ""
                 # Prefer the strict filtered content if available; otherwise use the base text
@@ -849,7 +889,7 @@ Please focus on the specific information requested in the question.
 """
 
             # Construct the full prompt with the correct content source
-            if is_general_query and 'latest_year' in locals() and latest_year:
+            if is_policy_query and is_general_query and 'latest_year' in locals() and latest_year:
                 # Use the filtered combined text if available, to avoid prior chat context
                 content_source = (effective_text if 'effective_text' in locals() and effective_text else (getattr(self, 'text_context', None) or self.content))
                 full_prompt = base_question_prompt + "\n\nDocument Content (filtered):\n" + content_source
@@ -1172,15 +1212,21 @@ def ask_question():
         except Exception as me:
             print('[DB] add_message(user) failed:', me)
 
+        # Generate response via chatbot
         response_text = chatbot.ask_question(question)
         # Final fallback: if user asked for a specific leave type, force concise days-only answer
         try:
-            from content_filter import detect_leave_type_from_question, extract_leave_days
+            from content_filter import detect_leave_type_from_question, extract_leave_days, parse_leave_allocation
             detected_type = detect_leave_type_from_question(question)
             if detected_type:
                 # Prefer latest-year filtered content available in chatbot, else combined_text, else model output
                 preferred_source = getattr(chatbot, 'filtered_content', '') or combined_text or ''
                 concise = extract_leave_days(preferred_source, detected_type) or extract_leave_days(response_text, detected_type)
+                if not concise:
+                    # As a stronger fallback, parse allocation map and return the specific count
+                    alloc = parse_leave_allocation(preferred_source) or parse_leave_allocation(response_text)
+                    if isinstance(alloc, dict) and detected_type in alloc:
+                        concise = f"{alloc[detected_type]} days"
                 if concise:
                     response_text = concise
         except Exception:

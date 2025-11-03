@@ -27,36 +27,62 @@ def filter_latest_year_content(content):
     """
     candidates = _collect_year_candidates(content)
     if not candidates:
-        print("[FILTER] No years found in content.")
-        return "", None
+        print("[FILTER] No years found in content. Passing through full content.")
+        # Preserve existing functionality for docs without explicit years
+        return content.strip(), None
 
     latest_year = str(max(candidates))
     print(f"[FILTER] Latest year detected: {latest_year}")
 
-    # Split into paragraphs and keep those tied to latest_year, plus small local context
-    paragraphs = [p.strip() for p in re.split(r'\n{1,}', content) if p.strip()]
-    keep_indexes = set()
-    for idx, para in enumerate(paragraphs):
-        # Mark paragraphs that explicitly reference latest_year or an FY range whose max equals latest_year
-        mentions_year = re.search(rf'\b{latest_year}\b', para) is not None
-        mentions_range_to_latest = False
-        for a, b in re.findall(r'(20\d{2})\s*[-/]\s*(20\d{2}|\d{2})', para):
-            a_int = int(a)
-            b_int = int(b) if len(b) == 4 else int(str(a_int)[:2] + b)
-            if max(a_int, b_int) == int(latest_year):
-                mentions_range_to_latest = True
+    # Try to capture the entire section starting at the first heading mentioning the latest year
+    lines = [ln for ln in content.splitlines()]
+    start_idx = None
+    for i, ln in enumerate(lines):
+        if re.search(rf'\b{latest_year}\b', ln, flags=re.IGNORECASE):
+            # Prefer lines that look like a heading
+            if re.search(r'(?i)company\s+leave\s+calendar', ln) or re.search(r'(?i)leave\s+policy|calendar|description', ln):
+                start_idx = i
                 break
-        if mentions_year or mentions_range_to_latest:
-            keep_indexes.add(idx)
-            # Also keep a small context window around the paragraph if those neighbors do NOT mention other years
-            for j in (idx-2, idx-1, idx+1, idx+2):
-                if 0 <= j < len(paragraphs):
-                    other_years_in_neighbor = re.findall(r'20\d{2}', paragraphs[j])
-                    if not any(y != latest_year for y in other_years_in_neighbor):
-                        keep_indexes.add(j)
+            if start_idx is None:
+                start_idx = i
+    end_idx = None
+    if start_idx is not None:
+        for j in range(start_idx + 1, len(lines)):
+            years_in_line = re.findall(r'20\d{2}', lines[j])
+            # Stop when another explicit different 20xx year header appears
+            if any(y != latest_year for y in years_in_line):
+                end_idx = j
+                break
+        if end_idx is None:
+            end_idx = len(lines)
+        section_text = "\n".join(lines[start_idx:end_idx]).strip()
+    else:
+        section_text = ""
 
-    kept = [paragraphs[i] for i in sorted(keep_indexes)]
-    filtered_content = "\n".join(kept).strip()
+    # Fallback proximity-based keep if section extraction failed or too short
+    if not section_text or len(section_text) < 40:
+        paragraphs = [p.strip() for p in re.split(r'\n{1,}', content) if p.strip()]
+        keep_indexes = set()
+        for idx, para in enumerate(paragraphs):
+            mentions_year = re.search(rf'\b{latest_year}\b', para) is not None
+            mentions_range_to_latest = False
+            for a, b in re.findall(r'(20\d{2})\s*[-/]\s*(20\d{2}|\d{2})', para):
+                a_int = int(a)
+                b_int = int(b) if len(b) == 4 else int(str(a_int)[:2] + b)
+                if max(a_int, b_int) == int(latest_year):
+                    mentions_range_to_latest = True
+                    break
+            if mentions_year or mentions_range_to_latest:
+                keep_indexes.add(idx)
+                for j in (idx-5, idx-4, idx-3, idx-2, idx-1, idx+1, idx+2, idx+3, idx+4, idx+5):
+                    if 0 <= j < len(paragraphs):
+                        other_years_in_neighbor = re.findall(r'20\d{2}', paragraphs[j])
+                        if not any(y != latest_year for y in other_years_in_neighbor):
+                            keep_indexes.add(j)
+        kept = [paragraphs[i] for i in sorted(keep_indexes)]
+        section_text = "\n".join(kept).strip()
+
+    filtered_content = section_text
 
     if not filtered_content:
         # Fallback: keep any lines mentioning latest_year
@@ -100,8 +126,8 @@ def filter_latest_year_content(content):
     # Clean numbered policy prefixes to avoid the model referencing multiples
     filtered_content = re.sub(r'(?i)\bPolicy\s*\d+\s*[:：-]?\s*', '', filtered_content)
 
-    # Add a clear data marker for later filtering
-    filtered_content = f"YEAR_{latest_year}_ONLY_DATA\n\n{filtered_content.strip()}"
+    # Add a clear data marker for later filtering (only when a latest year exists)
+    filtered_content = f"YEAR_{latest_year}_ONLY_DATA\n\n{filtered_content.strip()}" if latest_year else filtered_content.strip()
 
     print(f"[FILTER] Final filtered content length: {len(filtered_content)} chars")
     return filtered_content.strip(), latest_year
@@ -167,6 +193,83 @@ def detect_leave_type_from_question(question):
         return 'casual'
 
     return None
+
+
+def parse_leave_allocation(filtered_content):
+    """Parse leave allocation numbers into a dict {sick:int, planned:int, casual:int}."""
+    if not filtered_content:
+        return {}
+    alloc = {}
+    for lt in ('sick', 'planned', 'casual'):
+        days = extract_leave_days(filtered_content, lt)
+        if days:
+            try:
+                alloc[lt] = int(re.search(r'(\d+)', days).group(1))
+            except Exception:
+                pass
+    return alloc
+
+
+def extract_max_leave_type(filtered_content):
+    """Return (type, days) for the maximum among sick/planned/casual, or (None, None)."""
+    alloc = parse_leave_allocation(filtered_content)
+    if not alloc:
+        return None, None
+    max_type = max(alloc, key=lambda k: alloc[k])
+    return max_type, alloc[max_type]
+
+
+WEEKDAYS = "monday tuesday wednesday thursday friday saturday sunday".split()
+
+
+def extract_holiday_info(filtered_content, holiday_name, year=None):
+    """Extract holiday date string and weekday for a given holiday name and optional year.
+
+    Returns (date_str, weekday) or (None, None).
+    """
+    if not filtered_content or not holiday_name:
+        return None, None
+    name = holiday_name.strip()
+    # Build regex with optional year constraint
+    year_part = f"\s*{year}" if year else "\s*20\\d{2}"
+    # e.g., Diwali Holiday: 20 October 2025 (Monday)
+    pattern = rf"(?i){re.escape(name)}\s*Holiday\s*[:：-]?\s*(\d{1,2}\s+[A-Za-z]+{year_part})\s*\(({'|'.join([w.capitalize() for w in WEEKDAYS])})\)"
+    m = re.search(pattern, filtered_content)
+    if m:
+        return m.group(1), m.group(2)
+    # Fallback: date without weekday
+    pattern2 = rf"(?i){re.escape(name)}\s*Holiday\s*[:：-]?\s*(\d{1,2}\s+[A-Za-z]+{year_part})"
+    m2 = re.search(pattern2, filtered_content)
+    if m2:
+        return m2.group(1), None
+    return None, None
+
+
+def list_official_holidays(filtered_content):
+    """Return list of holiday names mentioned under Official Holidays."""
+    if not filtered_content:
+        return []
+    holidays = []
+    for name in ("Diwali", "Christmas"):
+        d, _w = extract_holiday_info(filtered_content, name)
+        if d:
+            holidays.append(name)
+    return holidays
+
+
+def extract_remarks(filtered_content):
+    """Extract the remarks block text."""
+    if not filtered_content:
+        return ""
+    # Find 'Remarks:' line and capture until next double newline or section heading
+    parts = re.split(r'(?im)^\s*remarks\s*[:：-]?\s*', filtered_content)
+    if len(parts) < 2:
+        return ""
+    tail = parts[1]
+    # Stop at next heading keyword or end
+    split_tail = re.split(r'(?im)^(official\s*holidays|leave\s*allocation)\s*[:：-]?', tail)
+    remarks = split_tail[0].strip()
+    return remarks
 
 
 def get_latest_year_prompt(question, latest_year):
