@@ -793,8 +793,48 @@ class EnhancedMultiFormatChatbot:
             return "Please load a file first using 'load <file_path>' command."
         
         try:
-            # Enhanced question processing
-            base_question_prompt = f"""
+            # Check if the question is about a specific year
+            specific_year_match = re.search(r'(20\d{2})', question.lower())
+            is_general_query = not specific_year_match
+
+            # Prepare combined context
+            base_text_for_filter = getattr(self, 'text_context', None) or self.content or ""
+
+            # Import helpers
+            from content_filter import filter_latest_year_content, get_latest_year_prompt
+
+            # Always compute latest-year filtered content (used by both general and specific queries)
+            filtered_content, latest_year = filter_latest_year_content(base_text_for_filter)
+            if is_general_query and latest_year:
+                # Modify question to steer the model
+                question = f"{question} for {latest_year} ONLY"
+                print(f"[FILTER] Modified question to: {question}")
+            # Cache filtered content for extraction and prompts
+            self.filtered_content = filtered_content or ""
+
+            # If the user asked for a specific leave type count, answer concisely without the model
+            try:
+                from content_filter import extract_leave_days, detect_leave_type_from_question
+                ql = question.lower()
+                detected_type = detect_leave_type_from_question(ql)
+                if detected_type:
+                    # Prefer latest-year filtered content, fallback to combined text
+                    days = extract_leave_days(self.filtered_content, detected_type) or extract_leave_days(base_text_for_filter, detected_type)
+                    if days:
+                        return days
+            except Exception as _e:
+                pass
+            
+            # Enhanced question processing with year-specific instructions and content filtering
+            if is_general_query and 'latest_year' in locals() and latest_year:
+                # Determine the base text to operate on (combined docs take precedence)
+                base_text = getattr(self, 'text_context', None) or self.content or ""
+                # Prefer the strict filtered content if available; otherwise use the base text
+                effective_text = getattr(self, 'filtered_content', None) or base_text
+                # Use our dedicated function to get a restrictive system prompt
+                base_question_prompt = get_latest_year_prompt(question, latest_year)
+            else:
+                base_question_prompt = f"""
 Question: {question}
 
 Please provide a direct, specific answer based on the document content. The document has been analyzed for:
@@ -808,8 +848,56 @@ Please provide a direct, specific answer based on the document content. The docu
 Please focus on the specific information requested in the question.
 """
 
-            response = self.chat.send_message(base_question_prompt)
-            return response.text
+            # Construct the full prompt with the correct content source
+            if is_general_query and 'latest_year' in locals() and latest_year:
+                # Use the filtered combined text if available, to avoid prior chat context
+                content_source = (effective_text if 'effective_text' in locals() and effective_text else (getattr(self, 'text_context', None) or self.content))
+                full_prompt = base_question_prompt + "\n\nDocument Content (filtered):\n" + content_source
+                # Send via a fresh, ephemeral chat to avoid contamination from earlier messages
+                temp_chat = self.model.start_chat()
+                response = temp_chat.send_message(full_prompt)
+                response_text = response.text if hasattr(response, 'text') else str(response)
+                # Post-process: strip any lines mentioning non-latest years
+                try:
+                    lines = response_text.splitlines()
+                    cleaned_lines = []
+                    for ln in lines:
+                        years_in_line = set(re.findall(r'20\d{2}', ln))
+                        if any(y != latest_year for y in years_in_line):
+                            continue
+                        cleaned_lines.append(ln)
+                    response_text_clean = "\n".join(cleaned_lines).strip()
+                    # If this was a specific leave-type query, reduce to concise days
+                    try:
+                        from content_filter import extract_leave_days, detect_leave_type_from_question
+                        detected_type = detect_leave_type_from_question(question)
+                        if detected_type:
+                            concise = extract_leave_days(response_text_clean or response_text, detected_type)
+                            if concise:
+                                return concise
+                    except Exception:
+                        pass
+                    if not response_text_clean:
+                        response_text_clean = f"Here is the information for {latest_year} (latest available):\nNo other year-specific details are included."
+                    return response_text_clean
+                except Exception:
+                    return response_text
+            else:
+                full_prompt = base_question_prompt + "\n\nDocument Content:\n" + self.content
+                response = self.chat.send_message(full_prompt)
+                response_text = response.text if hasattr(response, 'text') else str(response)
+                # If the question was a specific leave-type query but extraction failed earlier,
+                # try to reduce the model's verbose answer to just the days.
+                try:
+                    from content_filter import extract_leave_days, detect_leave_type_from_question
+                    detected_type = detect_leave_type_from_question(question)
+                    if detected_type:
+                        concise = extract_leave_days(response_text, detected_type)
+                        if concise:
+                            return concise
+                except Exception:
+                    pass
+                return response_text
 
         except Exception as e:
             return f"Error: {e}"
@@ -1085,6 +1173,18 @@ def ask_question():
             print('[DB] add_message(user) failed:', me)
 
         response_text = chatbot.ask_question(question)
+        # Final fallback: if user asked for a specific leave type, force concise days-only answer
+        try:
+            from content_filter import detect_leave_type_from_question, extract_leave_days
+            detected_type = detect_leave_type_from_question(question)
+            if detected_type:
+                # Prefer latest-year filtered content available in chatbot, else combined_text, else model output
+                preferred_source = getattr(chatbot, 'filtered_content', '') or combined_text or ''
+                concise = extract_leave_days(preferred_source, detected_type) or extract_leave_days(response_text, detected_type)
+                if concise:
+                    response_text = concise
+        except Exception:
+            pass
         print("[DEBUG] Got response:", response_text)
 
         log_conversation(question, response_text)
