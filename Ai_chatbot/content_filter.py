@@ -237,12 +237,104 @@ def extract_holiday_info(filtered_content, holiday_name, year=None):
     m = re.search(pattern, filtered_content)
     if m:
         return m.group(1), m.group(2)
-    # Fallback: date without weekday
+    # Fallback format: "Diwali – 20 October 2025 (Monday)" (no 'Holiday' word)
+    pattern_alt = rf"(?i){re.escape(name)}\s*[–\-]\s*(\d{1,2}\s+[A-Za-z]+{year_part})\s*\(({'|'.join([w.capitalize() for w in WEEKDAYS])})\)"
+    m_alt = re.search(pattern_alt, filtered_content)
+    if m_alt:
+        return m_alt.group(1), m_alt.group(2)
+    # Fallback: date without weekday (both variants)
     pattern2 = rf"(?i){re.escape(name)}\s*Holiday\s*[:：-]?\s*(\d{1,2}\s+[A-Za-z]+{year_part})"
     m2 = re.search(pattern2, filtered_content)
     if m2:
         return m2.group(1), None
+    pattern2b = rf"(?i){re.escape(name)}\s*[–\-]\s*(\d{1,2}\s+[A-Za-z]+{year_part})"
+    m2b = re.search(pattern2b, filtered_content)
+    if m2b:
+        return m2b.group(1), None
     return None, None
+
+
+def parse_official_holidays(text, year: str = None):
+    """Parse the Official Holidays section and return a dict: {name: (date_str, weekday)}.
+
+    - Works with lines like:
+      "Official Holidays:"
+      "Diwali – 20 October 2025 (Monday)"
+      "Diwali Holiday: 20 October 2025 (Monday)"
+    - If year is provided, prefers entries that include that year in the date.
+    """
+    if not text:
+        return {}
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if re.search(r'(?i)^\s*official\s*holidays\s*[:：-]?', ln):
+            start = i + 1
+            break
+    if start is None:
+        # try to find any line that looks like a holiday entry even without heading
+        start = 0
+    # stop at next heading
+    stop = len(lines)
+    for j in range(start, len(lines)):
+        if re.search(r'(?i)^(remarks|leave\s*allocation|additional\s*guidelines)\s*[:：-]?', lines[j]):
+            stop = j
+            break
+    entries = {}
+    body = lines[start:stop]
+    # Join wrapped bullet lines
+    merged = []
+    buf = ''
+    for ln in body:
+        if re.match(r'^\s*[-•*]', ln) or re.match(r'^[A-Za-z]', ln):
+            if buf:
+                merged.append(buf.strip())
+            buf = ln
+        else:
+            buf += ' ' + ln.strip()
+    if buf:
+        merged.append(buf.strip())
+
+    # Regex patterns
+    day_group = '(' + '|'.join([w.capitalize() for w in WEEKDAYS]) + ')'
+    date_pat = r'(\d{1,2}\s+[A-Za-z]+\s+20\d{2})'
+    # e.g., Name – 20 October 2025 (Monday) OR Name Holiday: 20 October 2025 (Monday)
+    pat1 = re.compile(rf'(?i)^\s*([A-Za-z][A-Za-z\s&]+?)\s*(?:Holiday)?\s*[:–-]\s*{date_pat}\s*\({day_group}\)')
+    pat2 = re.compile(rf'(?i)^\s*([A-Za-z][A-Za-z\s&]+?)\s*(?:Holiday)?\s*[:–-]\s*{date_pat}\b')
+
+    for ln in merged:
+        m = pat1.search(ln) or pat2.search(ln)
+        if m:
+            name = m.group(1).strip()
+            date_str = m.group(2).strip() if m.lastindex and m.lastindex >= 2 else None
+            weekday = m.group(3).strip() if m.lastindex and m.lastindex >= 3 else None
+            if year and date_str and (year not in date_str):
+                continue
+            # prefer first match per name for given year
+            key = name.lower()
+            if key not in entries:
+                entries[key] = (date_str, weekday)
+    return entries
+
+
+def extract_holiday_from_question(text, question: str, year: str = None):
+    """Extract a single holiday's date/weekday based on a free-form question.
+
+    - Parses all holidays, finds which holiday name appears in the question.
+    - Returns (date_str, weekday, matched_name) or (None, None, None).
+    """
+    holidays = parse_official_holidays(text, year)
+    if not holidays:
+        return None, None, None
+    ql = (question or '').lower()
+    matches = [name for name in holidays.keys() if name in ql]
+    if len(matches) == 1:
+        return (*holidays[matches[0]], matches[0])
+    # If multiple or none match, but only one holiday exists in that year, return it
+    if len(holidays) == 1:
+        only = next(iter(holidays.keys()))
+        return (*holidays[only], only)
+    return None, None, None
 
 
 def list_official_holidays(filtered_content):

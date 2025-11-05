@@ -800,6 +800,8 @@ class EnhancedMultiFormatChatbot:
             is_policy_query = any(k in q_lower for k in [
                 'leave', 'policy', 'holiday', 'calendar', 'official holiday'
             ])
+            # Generic holiday detection: ask if any holiday name mentioned will be extracted later
+            is_holiday_query = ('holiday' in q_lower) or ('official holidays' in q_lower)
 
             # Prepare combined context
             base_text_for_filter = getattr(self, 'text_context', None) or self.content or ""
@@ -807,10 +809,14 @@ class EnhancedMultiFormatChatbot:
             # Import helpers
             from content_filter import filter_latest_year_content, get_latest_year_prompt
 
+            # Determine latest year from the corpus regardless of query type
+            _tmp_content_for_year, latest_year_any = filter_latest_year_content(base_text_for_filter)
+
             # Compute latest-year filtered content only for policy-style queries
             filtered_content, latest_year = ("", None)
-            if is_policy_query:
-                filtered_content, latest_year = filter_latest_year_content(base_text_for_filter)
+            if is_policy_query or (is_holiday_query and is_general_query):
+                filtered_content = _tmp_content_for_year or ""
+                latest_year = latest_year_any
                 if is_general_query and latest_year:
                     # Modify question to steer the model
                     question = f"{question} for {latest_year} ONLY"
@@ -830,11 +836,12 @@ class EnhancedMultiFormatChatbot:
                         return days
                 # Holidays: date/weekday queries
                 holiday_name = 'diwali' if 'diwali' in ql else ('christmas' if 'christmas' in ql else None)
-                if holiday_name:
-                    # Specific year override if present in question
-                    yr_match = re.search(r'(20\d{2})', ql)
-                    specified_year = yr_match.group(1) if yr_match else (latest_year if is_general_query else None)
-                    date_str, weekday = extract_holiday_info(self.filtered_content or base_text_for_filter, holiday_name.capitalize(), specified_year)
+                # Generic holiday name resolution from the question
+                from content_filter import extract_holiday_from_question
+                yr_match = re.search(r'(20\d{2})', ql)
+                specified_year = yr_match.group(1) if yr_match else (latest_year_any if is_general_query else None)
+                date_str, weekday, _matched = extract_holiday_from_question(self.filtered_content or base_text_for_filter, question, specified_year)
+                if _matched:
                     if 'day of the week' in ql or 'which day' in ql or 'weekday' in ql:
                         if weekday:
                             return weekday
@@ -1232,6 +1239,38 @@ def ask_question():
         except Exception:
             pass
         print("[DEBUG] Got response:", response_text)
+
+        # Final holiday cleanup: if question mentions a holiday name (any), reduce to latest-year only
+        try:
+            ql = question.lower()
+            if not re.search(r'(20\d{2})', ql):
+                from content_filter import extract_holiday_from_question, filter_latest_year_content
+                base_text = getattr(chatbot, 'text_context', None) or combined_text or ''
+                _, latest_year_any = filter_latest_year_content(base_text or response_text)
+                if latest_year_any:
+                    date_str, weekday, matched = extract_holiday_from_question(base_text or response_text, question, latest_year_any)
+                    if matched:
+                        if 'day of the week' in ql or 'which day' in ql or 'weekday' in ql:
+                            if weekday:
+                                response_text = weekday
+                        elif 'when' in ql or 'date' in ql or 'kab' in ql:
+                            if date_str:
+                                response_text = date_str
+                    else:
+                        # Fallback: trim model output to only lines mentioning the latest year
+                        try:
+                            lines = response_text.splitlines()
+                            kept = []
+                            for ln in lines:
+                                years = set(re.findall(r'20\d{2}', ln))
+                                if latest_year_any in years:
+                                    kept.append(ln)
+                            if kept:
+                                response_text = "\n".join(kept).strip()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
         log_conversation(question, response_text)
 
