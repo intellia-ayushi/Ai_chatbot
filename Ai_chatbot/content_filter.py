@@ -337,6 +337,63 @@ def extract_holiday_from_question(text, question: str, year: str = None):
     return None, None, None
 
 
+def find_holiday_by_date(text, date_query: str, year: str = None):
+    """Given a date fragment like '26 January' (and optional year), return holiday name.
+
+    Returns the matched holiday name or None.
+    """
+    if not text or not date_query:
+        return None
+    # Normalize spaces and case
+    dq = re.sub(r'\s+', ' ', date_query.strip())
+    # Build year-aware pattern
+    if year:
+        pat = re.compile(rf'(?i)\b([A-Za-z][A-Za-z\s&]+?)\b.*?(?:Holiday)?\s*[:–-]?\s*{re.escape(dq)}\s+{year}\b')
+    else:
+        pat = re.compile(rf'(?i)\b([A-Za-z][A-Za-z\s&]+?)\b.*?(?:Holiday)?\s*[:–-]?\s*{re.escape(dq)}\s+20\d{2}\b')
+    # Search within official holidays block first for precision
+    hols_block = '\n'.join(text.splitlines())
+    m = pat.search(hols_block)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def extract_application_system(text):
+    """Extract the system/portal used to apply for leave (e.g., HRMS portal)."""
+    if not text:
+        return None
+    # Look for sentences mentioning apply/applications and a portal/system name
+    m = re.search(r'(?i)apply\s+for\s+leave.*?(?:through|via|using)\s+the\s+([A-Z][A-Z]+\s+portal|[A-Za-z]+\s+portal|[A-Za-z]+\s+system)', text)
+    if m:
+        return m.group(1).strip()
+    # Direct HRMS portal mention
+    m2 = re.search(r'(?i)HRMS\s+portal', text)
+    if m2:
+        return 'HRMS portal'
+    return None
+
+
+def extract_carry_forward_days(text, year: str = None):
+    """Extract the maximum number of unused leaves that can be carried forward."""
+    if not text:
+        return None
+    pat = re.compile(r'(?i)carried\s+forward\s+(?:up\s+to\s+a\s+maximum\s+of\s+)?(\d{1,3})\s+days')
+    if year:
+        # Prefer matches near the specified year
+        # Simple heuristic: search in a window around the year occurrence
+        idx = text.lower().find(str(year))
+        if idx != -1:
+            window = text[max(0, idx-500): idx+500]
+            m = pat.search(window)
+            if m:
+                return f"{m.group(1)} days"
+    m2 = pat.search(text)
+    if m2:
+        return f"{m2.group(1)} days"
+    return None
+
+
 def list_official_holidays(filtered_content):
     """Return list of holiday names mentioned under Official Holidays."""
     if not filtered_content:

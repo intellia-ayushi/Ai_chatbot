@@ -834,10 +834,8 @@ class EnhancedMultiFormatChatbot:
                     days = extract_leave_days(self.filtered_content, detected_type) or extract_leave_days(base_text_for_filter, detected_type)
                     if days:
                         return days
-                # Holidays: date/weekday queries
-                holiday_name = 'diwali' if 'diwali' in ql else ('christmas' if 'christmas' in ql else None)
-                # Generic holiday name resolution from the question
-                from content_filter import extract_holiday_from_question
+                # Holidays: date/weekday queries (generic, no hardcoding names)
+                from content_filter import extract_holiday_from_question, find_holiday_by_date
                 yr_match = re.search(r'(20\d{2})', ql)
                 specified_year = yr_match.group(1) if yr_match else (latest_year_any if is_general_query else None)
                 date_str, weekday, _matched = extract_holiday_from_question(self.filtered_content or base_text_for_filter, question, specified_year)
@@ -848,6 +846,14 @@ class EnhancedMultiFormatChatbot:
                     if 'when' in ql or 'date' in ql or 'kab' in ql:
                         if date_str:
                             return date_str
+                # If question mentions a specific date, resolve to holiday name
+                m_date = re.search(r'(?i)\b(\d{1,2}\s+[A-Za-z]+)(?:\s+(20\d{2}))?\b', question)
+                if m_date and ('which holiday' in ql or 'holiday is observed' in ql or 'kaun sa holiday' in ql or 'konsi chhutti' in ql):
+                    dq = m_date.group(1)
+                    yr = m_date.group(2) if m_date.group(2) else specified_year
+                    name = find_holiday_by_date(self.filtered_content or base_text_for_filter, dq, yr)
+                    if name:
+                        return name
                 # Which leave type has highest days
                 if ('which' in ql or 'highest' in ql or 'max' in ql) and 'leave' in ql:
                     ltype, num = extract_max_leave_type(self.filtered_content or base_text_for_filter)
@@ -860,6 +866,18 @@ class EnhancedMultiFormatChatbot:
                     other_hols = [h for h in hols if h.lower() not in ql]
                     if len(hols) <= 2 and not other_hols:
                         return 'No'
+                # Through which system must employees apply for leave?
+                if 'apply' in ql and 'leave' in ql and ('through' in ql or 'via' in ql or 'system' in ql or 'portal' in ql):
+                    from content_filter import extract_application_system
+                    sys_name = extract_application_system(self.filtered_content or base_text_for_filter)
+                    if sys_name:
+                        return sys_name
+                # Maximum carry forward days
+                if ('carry' in ql or 'carried' in ql) and 'forward' in ql and ('unused' in ql or 'leaves' in ql or 'maximum' in ql):
+                    from content_filter import extract_carry_forward_days
+                    cf = extract_carry_forward_days(self.filtered_content or base_text_for_filter, specified_year)
+                    if cf:
+                        return cf
                 # Purpose of planned leave (remarks)
                 if 'purpose' in ql and 'planned' in ql:
                     remarks = extract_remarks(self.filtered_content or base_text_for_filter)
