@@ -19,13 +19,15 @@ from datetime import datetime
 from email_validator import clean_email, is_valid_email_format, extract_email_addresses_improved
 from document_analyzer import DocumentAnalyzer
 from auth import verify_user, get_user_email, extract_bearer_token
-from db import add_document, list_user_documents, create_chat, add_message, list_user_chats, list_messages, upsert_profile, list_profiles, upsert_profile_as_user, get_user_messages, append_user_message, get_user_messages_as_user, append_user_message_as_user
+from db import add_document, list_user_documents, create_chat, add_message, list_user_chats, list_messages, upsert_profile, list_profiles, upsert_profile_as_user, get_user_messages, append_user_message, get_user_messages_as_user, append_user_message_as_user, get_cached_answer_from_messages, upsert_cached_answer_in_messages, get_last_answer_for_normalized_question, get_qonly_cached_answer, insert_qonly_cached_answer
 from storage import upload_file_to_b2
 import tempfile
 import requests
 import threading
 from PyPDF2 import PdfReader
 import json
+import time
+import hashlib
 
 # Load environment variables
 load_dotenv()
@@ -42,6 +44,19 @@ PERSIST_DIR = os.path.join(BASE_DIR, "persist")
 CLIENT_MAP_PATH = os.path.join(PERSIST_DIR, "client_uploads.json")
 
 os.makedirs(PERSIST_DIR, exist_ok=True)
+
+def _normalize_question(q):
+    try:
+        if not isinstance(q, str):
+            return ''
+        q = q.strip().lower()
+        q = re.sub(r'[\s]+', ' ', q)
+        # remove punctuation while keeping alphanumerics and spaces
+        q = re.sub(r'[^\w\s]', '', q)
+        q = re.sub(r'[\s]+', ' ', q)
+        return q.strip()
+    except Exception:
+        return ''
 
 def log_conversation(user_input, bot_response, override=False):
     try:
@@ -208,7 +223,7 @@ class EnhancedMultiFormatChatbot:
         # Initialize with the first candidate; will fallback on first use
         initial_model_name = self.model_candidates[0] if self.model_candidates else "gemini-1.5-flash"
         print(f"[Gemini] Initial model candidate: {initial_model_name}")
-        self.model = ai.GenerativeModel(initial_model_name)
+        self.model = ai.GenerativeModel(initial_model_name, generation_config={"temperature": 0.1})
         self.content = ""
         self.chat = None
         self.current_file = ""
@@ -233,7 +248,7 @@ class EnhancedMultiFormatChatbot:
                 methods = getattr(m, "supported_generation_methods", []) or []
                 if "generateContent" in methods:
                     supported.append(m.name)  # full name like 'models/gemini-1.5-flash'
-            print(f"[Gemini] Supported models for this key: {supported}")
+            # print(f"[Gemini] Supported models for this key: {supported}")
             # Order supported by our preference if base name matches
             def base(n):
                 return n.split("/")[-1]
@@ -261,7 +276,7 @@ class EnhancedMultiFormatChatbot:
         last_error = None
         for model_name in self.model_candidates:
             try:
-                self.model = ai.GenerativeModel(model_name)
+                self.model = ai.GenerativeModel(model_name, generation_config={"temperature": 0.1})
                 self.chat = self.model.start_chat()
                 _ = self.chat.send_message(prompt)
                 print(f"✅ Chat initialized with model: {model_name}")
@@ -764,21 +779,21 @@ class EnhancedMultiFormatChatbot:
         # Enhanced context prompt for better table understanding
         context_prompt = f"""
         You are an AI assistant that answers questions based on document content, including structured data like tables and forms.
-        
-        IMPORTANT INSTRUCTIONS:
-        - Give direct, accurate answers based on the extracted content
-        - Pay special attention to tabular data and structured information
-        - When asked about educational qualifications, look for institution names, years, and percentages
-        - For B.Tech questions, specifically look for university/college names in the education section
-        - Be specific with names, dates, and numbers when available
-        - If information is in a table format, extract the exact values
-        
-        DOCUMENT CONTENT:
+
+    IMPORTANT INSTRUCTIONS:
+    - Give direct, accurate answers based on the extracted content
+    - Pay special attention to tabular data and structured information
+    - When asked about educational qualifications, look for institution names, years, and percentages
+    - For B.Tech questions, specifically look for university/college names in the education section
+    - Be specific with names, dates, and numbers when available
+    - If information is in a table format, extract the exact values
+
+    DOCUMENT CONTENT:
         {self.content}
-        
-        The document has been processed with enhanced table extraction. Answer questions accurately based on this content.
-        """
-        
+
+    The document has been processed with enhanced table extraction. Answer questions accurately based on this content.
+    """
+
         try:
             if self._start_chat_with_prompt(context_prompt):
                 print(f"✅ {file_type} loaded successfully! Enhanced table extraction completed.")
@@ -1218,6 +1233,14 @@ def ask_question():
     except Exception as e:
         print(f"[ERROR] Failed to load combined context into model: {e}")
 
+    # Build cache key (user + normalized question + context hash)
+    try:
+        norm_q = _normalize_question(question)
+        ctx_hash = hashlib.sha256((combined_text or '').encode('utf-8')).hexdigest()
+        cache_key = _make_cache_key(user_id or 'anon', norm_q, ctx_hash)
+    except Exception:
+        cache_key = None
+
     try:
         # Ensure chat exists and store messages to DB
         if not chat_id and STORE_PER_CHAT_ROWS:
@@ -1237,12 +1260,64 @@ def ask_question():
         except Exception as me:
             print('[DB] add_message(user) failed:', me)
 
-        # Generate response via chatbot
-        response_text = chatbot.ask_question(question)
+        # Check cache before generating
+        cached_hit = False
+        response_text = None
+        # 0) Question-only cache: first answer wins, ignore context
+        try:
+            token = extract_bearer_token(request)
+            qonly = get_qonly_cached_answer(token, user_id, norm_q)
+            if isinstance(qonly, str) and qonly:
+                response_text = qonly
+                cached_hit = True
+                print('[CACHE] hit (qonly)')
+        except Exception as e:
+            print('[CACHE] qonly get error:', e)
+
+        # 0b) Fallback: use last assistant answer for this normalized question and lock it in q-only cache
+        if not cached_hit:
+            try:
+                token = extract_bearer_token(request)
+                last_ans = get_last_answer_for_normalized_question(token, user_id, norm_q)
+                if isinstance(last_ans, str) and last_ans:
+                    response_text = last_ans
+                    cached_hit = True
+                    print('[CACHE] hit (last_answer)')
+                    try:
+                        insert_qonly_cached_answer(token, user_id, norm_q, last_ans)
+                    except Exception as ie:
+                        print('[CACHE] qonly insert (from last) error:', ie)
+            except Exception as e:
+                print('[CACHE] last_answer get error:', e)
+
+        if not cached_hit and cache_key:
+            # 1) in-memory
+            cached_val = _cache_get(cache_key)
+            if isinstance(cached_val, str) and cached_val:
+                response_text = cached_val
+                cached_hit = True
+                print('[CACHE] hit (memory)')
+            # 2) Supabase user_messages (context-based)
+            if response_text is None:
+                try:
+                    token = extract_bearer_token(request)
+                    db_ans = get_cached_answer_from_messages(token, user_id, norm_q, ctx_hash)
+                    if isinstance(db_ans, str) and db_ans:
+                        response_text = db_ans
+                        cached_hit = True
+                        print('[CACHE] hit (db user_messages)')
+                        _cache_set(cache_key, response_text)
+                except Exception as e:
+                    print('[CACHE] db get error:', e)
+        # Generate response via chatbot if no cache
+        if response_text is None:
+            response_text = chatbot.ask_question(question)
+
         # Final fallback: if user asked for a specific leave type, force concise days-only answer
         try:
-            from content_filter import detect_leave_type_from_question, extract_leave_days, parse_leave_allocation
-            detected_type = detect_leave_type_from_question(question)
+            from content_filter import extract_leave_days, detect_leave_type_from_question, extract_holiday_info, extract_max_leave_type, list_official_holidays, extract_remarks
+            ql = question.lower()
+            detected_type = detect_leave_type_from_question(ql)
             if detected_type:
                 # Prefer latest-year filtered content available in chatbot, else combined_text, else model output
                 preferred_source = getattr(chatbot, 'filtered_content', '') or combined_text or ''
@@ -1287,6 +1362,26 @@ def ask_question():
                                 response_text = "\n".join(kept).strip()
                         except Exception:
                             pass
+        except Exception:
+            pass
+
+        # Store in cache after post-processing
+        try:
+            if isinstance(response_text, str) and response_text:
+                # Insert question-only cache (first answer wins; no overwrite)
+                try:
+                    token = extract_bearer_token(request)
+                    insert_qonly_cached_answer(token, user_id, norm_q, response_text)
+                except Exception as e:
+                    print('[CACHE] qonly insert error:', e)
+                # Also keep previous context-based layers if you still want them
+                if cache_key:
+                    _cache_set(cache_key, response_text)
+                    try:
+                        token = extract_bearer_token(request)
+                        upsert_cached_answer_in_messages(token, user_id, norm_q, ctx_hash, response_text)
+                    except Exception as e:
+                        print('[CACHE] db upsert error:', e)
         except Exception:
             pass
 

@@ -1,6 +1,7 @@
 import os
 from typing import List, Optional, Dict, Any
 from supabase import create_client, Client
+from datetime import datetime
 
 
 def get_supabase_client() -> Client:
@@ -132,7 +133,40 @@ def upsert_profile_as_user(jwt: str, user_id: str, email: Optional[str] = None) 
             sb.postgrest.auth(None)
         except Exception:
             pass
+
+
+def get_last_answer_for_normalized_question(jwt: str, user_id: str, question_norm: str) -> Optional[str]:
+    sb = get_supabase_client()
+    try:
+        if jwt:
+            sb.postgrest.auth(jwt)
+        resp = sb.table('user_messages').select('messages').eq('user_id', user_id).single().execute()
+        msgs = (resp.data or {}).get('messages') if resp.data else None
+        if not isinstance(msgs, list):
+            return None
+        last_answer = None
+        for i in range(len(msgs)):
+            item = msgs[i]
+            if isinstance(item, dict) and item.get('role') == 'user':
+                q = item.get('content')
+                if isinstance(q, str):
+                    norm = ' '.join(q.strip().lower().split())
+                    if norm == question_norm:
+                        if i + 1 < len(msgs):
+                            nxt = msgs[i + 1]
+                            if isinstance(nxt, dict) and nxt.get('role') == 'assistant':
+                                ans = nxt.get('content')
+                                if isinstance(ans, str) and ans:
+                                    last_answer = ans
+        return last_answer
+    except Exception as e:
+        print('[DB][last_answer][get] error:', e)
         return None
+    finally:
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
 
 
 # --- New: per-user message history stored as a JSON array ---
@@ -251,4 +285,125 @@ def append_user_message_as_user(jwt: str, user_id: str, role: str, content: str)
             pass
 
 
+
+
+# --- QA cache via user_messages JSON array ---
+
+def get_cached_answer_from_messages(jwt: str, user_id: str, question_norm: str, ctx_hash: str) -> Optional[str]:
+    """Scan user_messages.messages for a cached answer with matching question_norm and ctx_hash.
+    Returns the latest matching answer or None.
+    """
+    sb = get_supabase_client()
+    try:
+        if jwt:
+            sb.postgrest.auth(jwt)
+        resp = sb.table('user_messages').select('messages').eq('user_id', user_id).single().execute()
+        msgs = (resp.data or {}).get('messages') if resp.data else None
+        if isinstance(msgs, list):
+            # search latest first
+            for item in reversed(msgs):
+                if isinstance(item, dict) and item.get('type') == 'qa_cache':
+                    if item.get('question_norm') == question_norm and item.get('ctx_hash') == ctx_hash:
+                        ans = item.get('answer')
+                        if isinstance(ans, str) and ans:
+                            return ans
+    except Exception as e:
+        print('[DB][cache][get] error:', e)
+    finally:
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
+    return None
+
+
+def upsert_cached_answer_in_messages(jwt: str, user_id: str, question_norm: str, ctx_hash: str, answer: str) -> None:
+    """Insert or replace a cache entry in user_messages.messages for this (question_norm, ctx_hash).
+    Keeps other messages untouched.
+    """
+    sb = get_supabase_client()
+    try:
+        if jwt:
+            sb.postgrest.auth(jwt)
+        # fetch current messages (no .single() to be tolerant of empty)
+        resp = sb.table('user_messages').select('messages').eq('user_id', user_id).execute()
+        msgs = []
+        if resp.data and len(resp.data) > 0 and isinstance(resp.data[0].get('messages'), list):
+            msgs = resp.data[0]['messages']
+        # remove existing cache entry for same key
+        filtered = []
+        for item in (msgs or []):
+            if isinstance(item, dict) and item.get('type') == 'qa_cache' and \
+               item.get('question_norm') == question_norm and item.get('ctx_hash') == ctx_hash:
+                continue
+            filtered.append(item)
+        # append new cache record
+        filtered.append({
+            'type': 'qa_cache',
+            'question_norm': question_norm,
+            'ctx_hash': ctx_hash,
+            'answer': answer,
+            'updated_at': datetime.utcnow().isoformat() + 'Z'
+        })
+        sb.table('user_messages').upsert({'user_id': user_id, 'messages': filtered}, on_conflict='user_id').execute()
+    except Exception as e:
+        print('[DB][cache][upsert] error:', e)
+    finally:
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
+
+
+# --- Question-only cache (ignore context), first-answer wins ---
+def get_qonly_cached_answer(jwt: str, user_id: str, question_norm: str) -> Optional[str]:
+    sb = get_supabase_client()
+    try:
+        if jwt:
+            sb.postgrest.auth(jwt)
+        resp = sb.table('user_messages').select('messages').eq('user_id', user_id).single().execute()
+        msgs = (resp.data or {}).get('messages') if resp.data else None
+        if isinstance(msgs, list):
+            for item in reversed(msgs):
+                if isinstance(item, dict) and item.get('type') == 'qa_cache_qonly':
+                    if item.get('question_norm') == question_norm:
+                        ans = item.get('answer')
+                        if isinstance(ans, str) and ans:
+                            return ans
+    except Exception as e:
+        print('[DB][qonly][get] error:', e)
+    finally:
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
+    return None
+
+
+def insert_qonly_cached_answer(jwt: str, user_id: str, question_norm: str, answer: str) -> None:
+    sb = get_supabase_client()
+    try:
+        if jwt:
+            sb.postgrest.auth(jwt)
+        resp = sb.table('user_messages').select('messages').eq('user_id', user_id).execute()
+        msgs = []
+        if resp.data and len(resp.data) > 0 and isinstance(resp.data[0].get('messages'), list):
+            msgs = resp.data[0]['messages']
+        for item in msgs:
+            if isinstance(item, dict) and item.get('type') == 'qa_cache_qonly' and item.get('question_norm') == question_norm:
+                return
+        msgs.append({
+            'type': 'qa_cache_qonly',
+            'question_norm': question_norm,
+            'answer': answer,
+            'updated_at': datetime.utcnow().isoformat() + 'Z'
+        })
+        sb.table('user_messages').upsert({'user_id': user_id, 'messages': msgs}, on_conflict='user_id').execute()
+    except Exception as e:
+        print('[DB][qonly][insert] error:', e)
+    finally:
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
 
