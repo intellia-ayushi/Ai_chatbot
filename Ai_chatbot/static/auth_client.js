@@ -9,6 +9,23 @@
 
   const supa = window.supabase.createClient(supabaseUrl, supabaseAnon);
 
+  function setLogoutEmailTooltip(email){
+    try{
+      const btnSide = document.getElementById('logoutBtnSide');
+      if (btnSide){
+        if (email){ btnSide.title = email; }
+        else { btnSide.removeAttribute('title'); }
+      }
+    }catch(e){}
+    try{
+      const btnTop = document.getElementById('logout'); // chat_supabase.html
+      if (btnTop){
+        if (email){ btnTop.title = email; }
+        else { btnTop.removeAttribute('title'); }
+      }
+    }catch(e){}
+  }
+
   async function ensureSession() {
     const { data: { session } } = await supa.auth.getSession();
     if (!session) {
@@ -16,6 +33,7 @@
       if (location.pathname !== "/") location.href = "/";
       return null;
     }
+    try{ setLogoutEmailTooltip(session.user && session.user.email); }catch(e){}
     return session;
   }
 
@@ -28,7 +46,12 @@
     let currentChatId = null;
 
     supa.auth.onAuthStateChange((_event, s) => {
-      if (s && s.access_token) accessToken = s.access_token;
+      if (s && s.access_token) {
+        accessToken = s.access_token;
+        try{ setLogoutEmailTooltip(s.user && s.user.email); }catch(e){}
+      } else {
+        try{ setLogoutEmailTooltip(null); }catch(e){}
+      }
     });
 
     // 🔧 Patch fetch to auto-inject auth token for local API calls

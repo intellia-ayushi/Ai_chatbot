@@ -56,9 +56,11 @@
                 localStorage.setItem(ACCESS_TOKEN_KEY, token);
                 statusEl.textContent = 'Signed in';
                 logoutBtn.classList.remove('hidden');
+                try{ logoutBtn.title = session.user?.email || 'Signed in'; }catch(e){}
             } else {
                 statusEl.textContent = 'Signed out';
                 logoutBtn.classList.add('hidden');
+                try{ logoutBtn.removeAttribute('title'); }catch(e){}
             }
         }
 
